@@ -2,7 +2,6 @@ cmake_minimum_required(VERSION 3.0.2)
 project(aruco_landing)
 
 find_package(catkin REQUIRED COMPONENTS
-  cv_bridge
   geometry_msgs
   roscpp
   rospy
