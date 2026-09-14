@@ -11,6 +11,10 @@ airsim_command_rate_hz: 60.0
 # "camera" means the optical-camera origin, not the vehicle/body origin.
 landing_altitude_min_m: 0.20
 touchdown_height_reference: camera
+# Horizontal landing error is also the camera origin in the pad frame. The
+# commanded velocity moves the vehicle body so that camera x/y, not body x/y,
+# converges to the marker-pad origin. MAVROS global vision pose remains body-based.
+horizontal_reference: camera
 landing_altitude_max_m: 2.00
 lateral_uncertainty_bound_m: 0.05
 minimum_lateral_speed_mps: 0.0

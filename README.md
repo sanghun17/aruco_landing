@@ -53,8 +53,12 @@ the crop offset before PnP. Native 720x720 simulation images use zero offset.
 
 ## Landing controller
 
-`landing_controller.launch` uses `/landing/vehicle_pose_pad` for horizontal
-feedback and the configured vehicle/camera pose for the touchdown-height test.
+`landing_controller.launch` defaults to `/landing/camera_pose_pad` for
+horizontal feedback and camera height for the touchdown test. Therefore the
+camera optical origin converges to the pad origin; the body origin generally
+does not. `/landing/vehicle_pose_pad` remains available for body-frame command
+conversion and global vision-pose registration. Both horizontal and touchdown
+references can be selected independently as `camera` or `vehicle`.
 After the first valid estimate, it begins horizontal PD feedback and constant-rate
 descent at the same time, saturates horizontal velocity, holds fixed yaw, and
 aborts after the marker-loss timeout. It publishes standard

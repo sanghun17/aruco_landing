@@ -25,6 +25,9 @@ class LandingController:
         self.touchdown_height_reference = str(
             rospy.get_param("~touchdown_height_reference", "camera")
         ).lower()
+        self.horizontal_reference = str(
+            rospy.get_param("~horizontal_reference", "camera")
+        ).lower()
         self.descent_speed = float(rospy.get_param("~descent_speed_mps", 0.50))
         self.speed_limit = float(
             rospy.get_param("~horizontal_speed_limit_mps", 2.0)
@@ -54,6 +57,7 @@ class LandingController:
         self.validate_parameters()
 
         self.pose = None
+        self.vehicle_pose = None
         self.camera_pose = None
         self.visible = False
         self.last_valid_receipt = None
@@ -111,9 +115,9 @@ class LandingController:
         self.timer = rospy.Timer(rospy.Duration(1.0 / self.rate_hz), self.update)
         rospy.loginfo(
             "landing controller ready: %.1f Hz, Kp=%.3f Kd=%.3f vd=%.3f, "
-            "touchdown=%s z<=%.3fm",
+            "horizontal=%s, touchdown=%s z<=%.3fm",
             self.rate_hz, self.kp, self.kd, self.descent_speed,
-            self.touchdown_height_reference, self.h_min
+            self.horizontal_reference, self.touchdown_height_reference, self.h_min
         )
 
     def validate_parameters(self):
@@ -129,38 +133,45 @@ class LandingController:
             raise ValueError("pose prediction and touchdown stop lead must be nonnegative")
         if self.touchdown_height_reference not in ("camera", "vehicle"):
             raise ValueError("touchdown_height_reference must be camera or vehicle")
+        if self.horizontal_reference not in ("camera", "vehicle"):
+            raise ValueError("horizontal_reference must be camera or vehicle")
 
     def pose_callback(self, message):
+        with self.lock:
+            self.vehicle_pose = message
+            if self.horizontal_reference == "vehicle":
+                self.update_horizontal_pose_locked(message)
+
+    def update_horizontal_pose_locked(self, message):
         position = message.pose.pose.position
         error = (-position.x, -position.y)
         stamp = message.header.stamp.to_sec()
-        with self.lock:
-            if (self.previous_error is not None and self.previous_pose_stamp is not None
-                    and stamp > self.previous_pose_stamp):
-                dt = stamp - self.previous_pose_stamp
-                if dt <= 0.25:
-                    raw_x = (error[0] - self.previous_error[0]) / dt
-                    raw_y = (error[1] - self.previous_error[1]) / dt
-                    alpha = (
-                        1.0 if self.derivative_filter_tau == 0.0
-                        else dt / (self.derivative_filter_tau + dt)
-                    )
-                    filtered_x = (
-                        (1.0 - alpha) * self.error_derivative[0] + alpha * raw_x
-                    )
-                    filtered_y = (
-                        (1.0 - alpha) * self.error_derivative[1] + alpha * raw_y
-                    )
-                    derivative_speed = math.hypot(filtered_x, filtered_y)
-                    if derivative_speed > self.derivative_speed_limit:
-                        scale = self.derivative_speed_limit / derivative_speed
-                        filtered_x *= scale
-                        filtered_y *= scale
-                    self.error_derivative = (filtered_x, filtered_y)
-            self.previous_error = error
-            self.previous_pose_stamp = stamp
-            self.pose = message
-            self.last_valid_receipt = rospy.get_time()
+        if (self.previous_error is not None and self.previous_pose_stamp is not None
+                and stamp > self.previous_pose_stamp):
+            dt = stamp - self.previous_pose_stamp
+            if dt <= 0.25:
+                raw_x = (error[0] - self.previous_error[0]) / dt
+                raw_y = (error[1] - self.previous_error[1]) / dt
+                alpha = (
+                    1.0 if self.derivative_filter_tau == 0.0
+                    else dt / (self.derivative_filter_tau + dt)
+                )
+                filtered_x = (
+                    (1.0 - alpha) * self.error_derivative[0] + alpha * raw_x
+                )
+                filtered_y = (
+                    (1.0 - alpha) * self.error_derivative[1] + alpha * raw_y
+                )
+                derivative_speed = math.hypot(filtered_x, filtered_y)
+                if derivative_speed > self.derivative_speed_limit:
+                    scale = self.derivative_speed_limit / derivative_speed
+                    filtered_x *= scale
+                    filtered_y *= scale
+                self.error_derivative = (filtered_x, filtered_y)
+        self.previous_error = error
+        self.previous_pose_stamp = stamp
+        self.pose = message
+        self.last_valid_receipt = rospy.get_time()
 
     def visible_callback(self, message):
         with self.lock:
@@ -169,9 +180,12 @@ class LandingController:
     def camera_pose_callback(self, message):
         with self.lock:
             self.camera_pose = message
+            if self.horizontal_reference == "camera":
+                self.update_horizontal_pose_locked(message)
 
     def reset_locked(self):
         self.pose = None
+        self.vehicle_pose = None
         self.camera_pose = None
         self.visible = False
         self.last_valid_receipt = None
@@ -202,6 +216,7 @@ class LandingController:
         with self.lock:
             state = self.state
             pose = self.pose
+            vehicle_pose = self.vehicle_pose
             camera_pose = self.camera_pose
             visible = self.visible
             last_valid = self.last_valid_receipt
@@ -243,14 +258,15 @@ class LandingController:
                 height_pose = (
                     camera_pose
                     if self.touchdown_height_reference == "camera"
-                    else pose
+                    else vehicle_pose
                 )
                 predicted_height = None
                 if height_pose is not None:
                     predicted_height = height_pose.pose.pose.position.z
-                    if self.latency_compensation_enabled and pose_stamp is not None:
+                    height_stamp = height_pose.header.stamp.to_sec()
+                    if self.latency_compensation_enabled and height_stamp > 0.0:
                         vertical_prediction_s = min(
-                            max(0.0, now_sec - pose_stamp), self.max_pose_prediction
+                            max(0.0, now_sec - height_stamp), self.max_pose_prediction
                         ) + self.touchdown_stop_lead
                         predicted_height -= self.descent_speed * vertical_prediction_s
                 if predicted_height is not None and predicted_height <= self.h_min:
