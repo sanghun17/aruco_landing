@@ -1,0 +1,12 @@
+# Proposed three-marker pad candidate 8. All design units are metres.
+# Input rows are marker centre x/y and side length:
+# (-0.1402, -0.1964, 0.0687), (0.1825, -0.0840, 0.2353),
+# (0.0260, 0.0028, 0.0500).
+name: proposed_three_marker_pad_8
+dictionary: DICT_4X4_100
+canvas_units: 0.7
+marker_border_bits: 1
+markers:
+  - {id: 0, x: 0.17545, y: 0.51205, size: 0.0687}
+  - {id: 1, x: 0.41485, y: 0.31635, size: 0.2353}
+  - {id: 2, x: 0.35100, y: 0.32220, size: 0.0500}
