@@ -1,0 +1,32 @@
+<launch>
+  <!-- MAVROS stays unchanged. This adapter is its sole vision-pose producer. -->
+  <arg name="mocap_topic" default="/vrpn_client_node/pure/pose"/>
+  <arg name="marker_pose_topic" default="/landing/vehicle_pose_pad"/>
+  <arg name="output_topic" default="/mavros/vision_pose/pose"/>
+  <arg name="global_frame" default="odom"/>
+  <arg name="allow_marker_switch" default="false"/>
+  <arg name="auto_switch" default="false"/>
+  <arg name="alignment_file" default=""/>
+
+  <node pkg="aruco_landing" type="landing_vision_pose_adapter.py"
+        name="landing_vision_pose_adapter" output="screen">
+    <param name="mocap_topic" value="$(arg mocap_topic)"/>
+    <param name="marker_pose_topic" value="$(arg marker_pose_topic)"/>
+    <param name="output_topic" value="$(arg output_topic)"/>
+    <param name="global_frame" value="$(arg global_frame)"/>
+    <param name="allow_marker_switch" value="$(arg allow_marker_switch)"/>
+    <param name="auto_switch" value="$(arg auto_switch)"/>
+    <param name="alignment_file" value="$(arg alignment_file)"/>
+    <param name="alignment_min_samples" value="30"/>
+    <param name="alignment_window_size" value="240"/>
+    <param name="alignment_translation_outlier_m" value="0.08"/>
+    <param name="alignment_rotation_outlier_deg" value="10.0"/>
+    <param name="alignment_max_translation_std_m" value="0.03"/>
+    <param name="alignment_max_rotation_std_deg" value="5.0"/>
+    <param name="max_pair_dt_s" value="0.035"/>
+    <param name="max_source_age_s" value="0.20"/>
+    <param name="min_marker_inliers" value="3"/>
+    <param name="max_switch_translation_jump_m" value="0.15"/>
+    <param name="max_switch_rotation_jump_deg" value="12.0"/>
+  </node>
+</launch>

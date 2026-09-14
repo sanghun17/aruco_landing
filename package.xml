@@ -18,8 +18,13 @@
   <depend>std_srvs</depend>
   <depend>tf2_ros</depend>
 
+  <exec_depend>rosbag</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+
   <build_depend>libopencv-dev</build_depend>
   <build_depend>libyaml-cpp-dev</build_depend>
 
   <exec_depend>python3-opencv</exec_depend>
+
+  <test_depend>python3-nose</test_depend>
 </package>

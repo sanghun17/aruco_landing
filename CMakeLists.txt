@@ -37,11 +37,17 @@ if(EXISTS "/opt/opencv-aruco/lib")
   )
 endif()
 
+if(CATKIN_ENABLE_TESTING)
+  catkin_add_nosetests(test/test_pose_alignment.py)
+endif()
+
 catkin_install_python(PROGRAMS
   scripts/aruco_detector_node.py
   scripts/generate_paper_pad.py
   scripts/landing_controller_node.py
+  scripts/landing_vision_pose_adapter.py
   scripts/pad_relative_vehicle_state.py
+  scripts/estimate_pad_global_pose.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
