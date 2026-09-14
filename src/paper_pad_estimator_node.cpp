@@ -41,6 +41,7 @@ double angleDifference(double first, double second) {
 struct MarkerModel {
   double size_m = 0.0;
   cv::Vec3d center_pad{0.0, 0.0, 0.0};
+  double yaw_rad = 0.0;
 };
 
 struct Candidate {
@@ -205,6 +206,8 @@ class PaperPadEstimator {
       model.center_pad =
           cv::Vec3d((center_x - canvas_units / 2.0) * scale,
                     (canvas_units / 2.0 - center_y) * scale, 0.0);
+      model.yaw_rad =
+          radians(marker["yaw_deg"] ? marker["yaw_deg"].as<double>() : 0.0);
       if (!markers_.emplace(id, model).second) {
         throw std::runtime_error("duplicate marker ID in layout");
       }
@@ -321,10 +324,17 @@ class PaperPadEstimator {
     Candidate candidate;
     candidate.id = id;
     candidate.marker_translation_camera = marker_translation;
-    candidate.pad_rotation_camera = rotation;
-    candidate.pad_translation_camera = marker_translation - rotation * model.center_pad;
-    candidate.quaternion = rotationToQuaternion(rotation);
-    candidate.yaw = std::atan2(rotation(1, 0), rotation(0, 0));
+    const double cosine = std::cos(model.yaw_rad);
+    const double sine = std::sin(model.yaw_rad);
+    const cv::Matx33d marker_rotation_pad(cosine, sine, 0.0,
+                                          -sine, cosine, 0.0,
+                                          0.0, 0.0, 1.0);
+    const cv::Matx33d pad_rotation_camera = rotation * marker_rotation_pad;
+    candidate.pad_rotation_camera = pad_rotation_camera;
+    candidate.pad_translation_camera =
+        marker_translation - pad_rotation_camera * model.center_pad;
+    candidate.quaternion = rotationToQuaternion(pad_rotation_camera);
+    candidate.yaw = std::atan2(pad_rotation_camera(1, 0), pad_rotation_camera(0, 0));
     candidate.reprojection_rmse_px = reprojection_rmse;
     candidate.quality =
         std::sqrt(std::max(1.0, pixel_area)) / std::max(reprojection_floor_px_, reprojection_rmse);
