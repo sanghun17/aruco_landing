@@ -1,0 +1,15 @@
+<launch>
+  <arg name="image_topic" default="/landing/camera/image_raw"/>
+  <arg name="camera_info_topic" default="/landing/camera/camera_info"/>
+  <arg name="target_id" default="0"/>
+  <arg name="marker_size_m" default="0.20"/>
+
+  <rosparam command="load" file="$(find aruco_landing)/config/detector.yaml" ns="aruco_detector"/>
+  <node pkg="aruco_landing" type="aruco_detector_node.py" name="aruco_detector"
+        output="screen" required="true">
+    <param name="image_topic" value="$(arg image_topic)"/>
+    <param name="camera_info_topic" value="$(arg camera_info_topic)"/>
+    <param name="target_id" value="$(arg target_id)"/>
+    <param name="marker_size_m" value="$(arg marker_size_m)"/>
+  </node>
+</launch>

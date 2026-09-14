@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>aruco_landing</name>
+  <version>0.1.0</version>
+  <description>Sensor-independent ArUco landing perception and planning.</description>
+
+  <maintainer email="sanghun17@users.noreply.github.com">sanghun17</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <depend>cv_bridge</depend>
+  <depend>geometry_msgs</depend>
+  <depend>roscpp</depend>
+  <depend>rospy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>tf2_ros</depend>
+
+  <build_depend>libopencv-dev</build_depend>
+  <build_depend>libyaml-cpp-dev</build_depend>
+
+  <exec_depend>python3-opencv</exec_depend>
+</package>

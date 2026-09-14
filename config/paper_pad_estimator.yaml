@@ -1,0 +1,26 @@
+pad_size_m: 0.70
+dictionary: DICT_4X4_100
+
+# Paper-faithful stages: per-marker PnP + LM, marker-to-pad transform, then
+# score-weighted RANSAC fusion. The paper does not publish these numeric values.
+ransac_translation_threshold_m: 0.12
+ransac_yaw_threshold_deg: 12.0
+ransac_max_iterations: 64
+ransac_min_inliers: 1
+
+# The paper names s(p_i) a detection score but does not define it. We use
+# sqrt(marker pixel area) / max(reprojection RMSE, floor), both observable.
+reprojection_error_floor_px: 0.25
+max_reprojection_error_px: 5.0
+
+translation_stddev_floor_m: 0.01
+rotation_stddev_floor_deg: 2.0
+processing_budget_ms: 16.6667
+# The real camera captures 1280x720. The experiment processes the centered
+# square ROI; CameraInfo principal point is shifted by the same crop offset.
+# A native 720x720 simulator image passes through with a zero offset.
+processing_width: 720
+processing_height: 720
+center_crop: true
+opencv_threads: 4
+publish_debug_image: false

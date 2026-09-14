@@ -1,0 +1,43 @@
+# Common simulation/hardware landing parameters. Values marked provisional are
+# still X in the manuscript and must be frozen before collecting final trials.
+parameter_status: provisional
+
+update_rate_hz: 60.0
+# The landing camera now uses mmap rather than image RPC. Apply every 60 Hz
+# controller update so the simulated vehicle does not track a staircase of
+# stale body-frame velocity commands.
+airsim_command_rate_hz: 60.0
+# Landing terminates when the selected estimated reference point reaches h_min.
+# "camera" means the optical-camera origin, not the vehicle/body origin.
+landing_altitude_min_m: 0.20
+touchdown_height_reference: camera
+landing_altitude_max_m: 2.00
+lateral_uncertainty_bound_m: 0.05
+minimum_lateral_speed_mps: 0.0
+descent_speed_mps: 0.50
+horizontal_speed_limit_mps: 2.0
+
+# Controller gains frozen after matched-seed tuning (1701 and 2909). The lower
+# proportional gain avoids crossing the pad centre under the measured vision
+# and AirSim command latency.
+kp_xy: 0.8
+kd_xy: 0.15
+# Low-pass and clamp the numerical pose derivative before applying Kd. This
+# prevents single-frame PnP branch changes from saturating the velocity command.
+derivative_filter_tau_s: 0.10
+derivative_speed_limit_mps: 2.0
+# Predict the delayed marker state to the controller's current time. This uses
+# only marker-pose timestamps and marker-derived velocity; simulator GT remains
+# evaluation-only.
+latency_compensation_enabled: true
+max_pose_prediction_s: 0.20
+# Marker height arrives with the same measured image delay as x/y. Predict the
+# current height and allow this much additional time for the simulated velocity
+# loop to settle after its zero command, so physical h=0.20 m is touchdown.
+touchdown_stop_lead_s: 0.08
+marker_loss_timeout_s: 0.50
+
+# The first valid marker pose starts horizontal feedback and vertical descent
+# simultaneously. There is intentionally no horizontal alignment/descent gate.
+yaw_reference_rad: 0.0
+trials_per_pad: 10

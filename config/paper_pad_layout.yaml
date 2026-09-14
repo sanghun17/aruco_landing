@@ -1,0 +1,78 @@
+# Pixel-faithful vector reconstruction of Fig. 1 in Yang et al., ICUS 2024.
+# The paper supplies no CAD/dimension table. The embedded figure was decoded as
+# DICT_4X4_100: small IDs 1..57 and large IDs 91..94. Coordinates below use a
+# square 540-unit design canvas reconstructed from the raster's symmetric grid.
+name: yang_icus2024_61_marker_pad
+source: "Yang et al., A Marker-Based Method of Autonomous Landing for UAVs, Fig. 1"
+reconstruction: pixel_faithful_from_embedded_figure
+dictionary: DICT_4X4_100
+canvas_units: 540.0
+marker_border_bits: 1
+
+markers:
+  # Outer ring, clockwise from the top-left.
+  - {id: 1,  x: 13,  y: 13,  size: 34}
+  - {id: 2,  x: 56,  y: 13,  size: 34}
+  - {id: 3,  x: 99,  y: 13,  size: 34}
+  - {id: 4,  x: 168, y: 13,  size: 34}
+  - {id: 5,  x: 211, y: 13,  size: 34}
+  - {id: 6,  x: 253, y: 13,  size: 34}
+  - {id: 7,  x: 296, y: 13,  size: 34}
+  - {id: 8,  x: 339, y: 13,  size: 34}
+  - {id: 9,  x: 408, y: 13,  size: 34}
+  - {id: 10, x: 451, y: 13,  size: 34}
+  - {id: 11, x: 494, y: 13,  size: 34}
+  - {id: 12, x: 494, y: 56,  size: 34}
+  - {id: 13, x: 494, y: 99,  size: 34}
+  - {id: 14, x: 494, y: 168, size: 34}
+  - {id: 15, x: 494, y: 211, size: 34}
+  - {id: 16, x: 494, y: 253, size: 34}
+  - {id: 17, x: 494, y: 296, size: 34}
+  - {id: 18, x: 494, y: 339, size: 34}
+  - {id: 19, x: 494, y: 408, size: 34}
+  - {id: 20, x: 494, y: 451, size: 34}
+  - {id: 21, x: 494, y: 494, size: 34}
+  - {id: 22, x: 451, y: 494, size: 34}
+  - {id: 23, x: 408, y: 494, size: 34}
+  - {id: 24, x: 339, y: 494, size: 34}
+  - {id: 25, x: 296, y: 494, size: 34}
+  - {id: 26, x: 253, y: 494, size: 34}
+  - {id: 27, x: 211, y: 494, size: 34}
+  - {id: 28, x: 168, y: 494, size: 34}
+  - {id: 29, x: 99,  y: 494, size: 34}
+  - {id: 30, x: 56,  y: 494, size: 34}
+  - {id: 31, x: 13,  y: 494, size: 34}
+  - {id: 32, x: 13,  y: 451, size: 34}
+  - {id: 33, x: 13,  y: 408, size: 34}
+  - {id: 34, x: 13,  y: 339, size: 34}
+  - {id: 35, x: 13,  y: 296, size: 34}
+  - {id: 36, x: 13,  y: 253, size: 34}
+  - {id: 37, x: 13,  y: 211, size: 34}
+  - {id: 38, x: 13,  y: 168, size: 34}
+  - {id: 39, x: 13,  y: 99,  size: 34}
+  - {id: 40, x: 13,  y: 56,  size: 34}
+
+  # Center cross. IDs preserve the exact arrangement decoded from Fig. 1.
+  - {id: 41, x: 253, y: 253, size: 34}
+  - {id: 42, x: 253, y: 211, size: 34}
+  - {id: 43, x: 296, y: 253, size: 34}
+  - {id: 44, x: 253, y: 296, size: 34}
+  - {id: 45, x: 211, y: 253, size: 34}
+  - {id: 46, x: 253, y: 168, size: 34}
+  - {id: 47, x: 339, y: 253, size: 34}
+  - {id: 48, x: 253, y: 339, size: 34}
+  - {id: 49, x: 168, y: 253, size: 34}
+  - {id: 50, x: 253, y: 56,  size: 34}
+  - {id: 51, x: 451, y: 253, size: 34}
+  - {id: 52, x: 253, y: 451, size: 34}
+  - {id: 53, x: 56,  y: 253, size: 34}
+  - {id: 54, x: 253, y: 99,  size: 34}
+  - {id: 55, x: 408, y: 253, size: 34}
+  - {id: 56, x: 253, y: 408, size: 34}
+  - {id: 57, x: 99,  y: 253, size: 34}
+
+  # Four large markers; their side length is exactly 4x the small marker side.
+  - {id: 91, x: 82,  y: 82,  size: 136}
+  - {id: 92, x: 322, y: 82,  size: 136}
+  - {id: 93, x: 82,  y: 322, size: 136}
+  - {id: 94, x: 322, y: 322, size: 136}

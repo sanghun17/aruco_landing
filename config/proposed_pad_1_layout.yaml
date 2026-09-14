@@ -1,0 +1,9 @@
+# Proposed two-marker pad candidate 1. All design units are metres.
+# Input marker centres: (0.1815, 0.0613), (0.0071, 0.0070).
+name: proposed_two_marker_pad_1
+dictionary: DICT_4X4_100
+canvas_units: 0.7
+marker_border_bits: 1
+markers:
+  - {id: 0, x: 0.42475, y: 0.18195, size: 0.2135}
+  - {id: 1, x: 0.32840, y: 0.31430, size: 0.0574}

@@ -1,0 +1,18 @@
+<launch>
+  <!-- The trial runner explicitly enables the controller after teleport/settle. -->
+  <arg name="enabled" default="false"/>
+  <!-- Optional experiment-time overrides. Normal runs keep the YAML as the
+       single source of truth; controller tuning can change gains without
+       rewriting that file between candidates. -->
+  <arg name="override_gains" default="false"/>
+  <arg name="kp_xy" default="0.8"/>
+  <arg name="kd_xy" default="0.15"/>
+  <rosparam command="load" file="$(find aruco_landing)/config/common_experiment.yaml"
+            ns="landing_controller"/>
+  <node pkg="aruco_landing" type="landing_controller_node.py"
+        name="landing_controller" output="screen" required="true">
+    <param name="enabled" value="$(arg enabled)"/>
+    <param if="$(arg override_gains)" name="kp_xy" value="$(arg kp_xy)"/>
+    <param if="$(arg override_gains)" name="kd_xy" value="$(arg kd_xy)"/>
+  </node>
+</launch>

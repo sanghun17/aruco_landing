@@ -1,0 +1,6 @@
+dictionary: DICT_4X4_100
+target_id: 0
+marker_size_m: 0.20
+publish_debug_image: true
+translation_stddev_m: 0.05
+rotation_stddev_deg: 5.0
