@@ -43,5 +43,11 @@ marker_loss_timeout_s: 0.50
 
 # The first valid marker pose starts horizontal feedback and vertical descent
 # simultaneously. There is intentionally no horizontal alignment/descent gate.
+# Body heading relative to pad +X, right-handed about pad +Z.
+# TwistStamped.angular.z is a pad-frame yaw-rate preview, not a MAVROS setpoint.
 yaw_reference_rad: 0.0
+yaw_control_enabled: true
+yaw_kp: 1.0
+yaw_rate_limit_rad_s: 0.35
+yaw_deadband_deg: 1.0
 trials_per_pad: 10

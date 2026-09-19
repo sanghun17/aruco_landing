@@ -111,7 +111,7 @@ configured translation and rotation limits:
 
 ```bash
 roslaunch aruco_landing landing_vision_pose_adapter.launch \
-  allow_marker_switch:=true alignment_file:=/work/experiments/alignment.yaml
+  allow_marker_switch:=true
 rosservice call /landing/pose_transition/select_marker "data: true"
 ```
 
@@ -130,3 +130,9 @@ rosrun aruco_landing estimate_pad_global_pose.py flight.bag \
 
 Use only one publisher for `/mavros/vision_pose/pose`. In particular, do not
 run the legacy flight-safety `vision_pose_mux` alongside this adapter.
+
+For the measured See3CAM pad, use the integrated `physical_pad_estimator.launch`
+(via `scripts/perception_aruco-landing.sh` in the stack repository). It publishes
+pad-body and online-aligned global-body poses plus subscriber-driven annotated
+images. Alignment is session-only and is reset through `/landing/alignment/reset`.
+Do not run the legacy vision adapter concurrently with this estimator.

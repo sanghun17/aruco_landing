@@ -5,6 +5,7 @@ import math
 import threading
 
 import rospy
+from aruco_landing.yaw_control import yaw_feedback
 from geometry_msgs.msg import PoseWithCovarianceStamped, TwistStamped
 from std_msgs.msg import Bool, Float64, String
 from std_srvs.srv import SetBool, SetBoolResponse, Trigger, TriggerResponse
@@ -53,7 +54,16 @@ class LandingController:
             rospy.get_param("~marker_loss_timeout_s", 0.30)
         )
         self.yaw_reference = float(rospy.get_param("~yaw_reference_rad", 0.0))
+        self.yaw_enabled = bool(rospy.get_param("~yaw_control_enabled", True))
+        self.yaw_kp = float(rospy.get_param("~yaw_kp", 1.0))
+        self.yaw_rate_limit = float(rospy.get_param("~yaw_rate_limit_rad_s", .35))
+        self.yaw_deadband = math.radians(float(rospy.get_param("~yaw_deadband_deg", 1.0)))
+        yaw_feedback([0.,0.,0.,1.], self.yaw_reference, self.yaw_kp,
+                     self.yaw_rate_limit, self.yaw_deadband)
         self.enabled = bool(rospy.get_param("~enabled", False))
+        # Preview re-evaluates each pose so repeated manual passes do not latch
+        # touchdown/abort. Real landing retains its terminal state machine.
+        self.preview_only = bool(rospy.get_param("~preview_only", False))
         self.validate_parameters()
 
         self.pose = None
@@ -73,11 +83,16 @@ class LandingController:
             "~target_visible_topic", "/landing/target_visible"
         )
         command_topic = rospy.get_param("~command_topic", "/landing/cmd_vel_pad")
+        if self.preview_only and not rospy.resolve_name(command_topic).startswith("/landing/shadow/"):
+            raise ValueError("preview_only requires a /landing/shadow/ command topic")
         self.command_publisher = rospy.Publisher(
             command_topic, TwistStamped, queue_size=1
         )
         self.yaw_publisher = rospy.Publisher(
             "/landing/yaw_cmd", Float64, queue_size=1, latch=True
+        )
+        self.yaw_error_publisher = rospy.Publisher(
+            "/landing/yaw_error", Float64, queue_size=1
         )
         self.active_publisher = rospy.Publisher(
             "/landing/controller/active", Bool, queue_size=1, latch=True
@@ -224,9 +239,14 @@ class LandingController:
             pose_stamp = self.previous_pose_stamp
             enabled = self.enabled
 
+            if self.preview_only:
+                state = self.WAITING
+                if (enabled and pose is not None and visible and last_valid is not None
+                        and now_sec - last_valid <= self.loss_timeout):
+                    state = self.DESCENDING
             if not enabled:
                 state = self.DISABLED
-            elif state == self.WAITING and pose is not None and visible:
+            elif state == self.WAITING and pose is not None and visible and not self.preview_only:
                 # The first valid marker estimate activates both horizontal
                 # feedback and vertical descent; there is no alignment gate.
                 state = self.DESCENDING
@@ -275,8 +295,20 @@ class LandingController:
                 else:
                     command.twist.linear.z = -self.descent_speed
 
+            yaw_error = float('nan')
+            if (self.yaw_enabled and state == self.DESCENDING and vehicle_pose is not None
+                    and vehicle_pose.header.frame_id == command.header.frame_id
+                    and -.05 <= now_sec-vehicle_pose.header.stamp.to_sec() <= self.loss_timeout):
+                q = vehicle_pose.pose.pose.orientation
+                try:
+                    yaw_error, command.twist.angular.z = yaw_feedback(
+                        [q.x,q.y,q.z,q.w], self.yaw_reference, self.yaw_kp,
+                        self.yaw_rate_limit, self.yaw_deadband)
+                except ValueError as error:
+                    rospy.logwarn_throttle(2., 'yaw command withheld: %s', error)
             self.state = state
 
+        self.yaw_error_publisher.publish(Float64(data=yaw_error))
         self.command_publisher.publish(command)
         self.yaw_publisher.publish(Float64(data=self.yaw_reference))
         self.active_publisher.publish(Bool(data=state == self.DESCENDING))

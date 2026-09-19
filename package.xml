@@ -19,6 +19,9 @@
   <depend>tf2_ros</depend>
 
   <exec_depend>rosbag</exec_depend>
+  <exec_depend>mavros_msgs</exec_depend>
+  <exec_depend>topic_tools</exec_depend>
+  <exec_depend>flight_safety</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
 
   <build_depend>libopencv-dev</build_depend>

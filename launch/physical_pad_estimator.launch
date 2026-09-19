@@ -1,0 +1,19 @@
+<launch>
+  <arg name="config_root" default="/work/stack-assets/aruco-landing-jetson/config"/>
+  <arg name="pad_configuration" default="$(arg config_root)/physical_pad.yaml"/>
+  <arg name="image_topic" default="/landing/camera/image_raw"/>
+  <arg name="camera_info_topic" default="/landing/camera/camera_info"/>
+  <arg name="mocap_topic" default="/vrpn_client_node/pure/pose"/>
+  <arg name="detected_image_rate_hz" default="10"/>
+  <arg name="estimate_rate_hz" default="60"/>
+  <node pkg="aruco_landing" type="physical_pad_estimator.py" name="physical_pad_estimator" output="screen" required="true">
+    <param name="pad_configuration" value="$(arg pad_configuration)"/>
+    <param name="body_camera_calibration" value="$(arg config_root)/calibration/20260919/base_link_to_see3cam_optical_frame.yaml"/>
+    <param name="time_alignment" value="$(arg config_root)/calibration/20260919/time_alignment.yaml"/>
+    <param name="image_topic" value="$(arg image_topic)"/>
+    <param name="camera_info_topic" value="$(arg camera_info_topic)"/>
+    <param name="mocap_topic" value="$(arg mocap_topic)"/>
+    <param name="detected_image_rate_hz" value="$(arg detected_image_rate_hz)"/>
+    <param name="estimate_rate_hz" value="$(arg estimate_rate_hz)"/>
+  </node>
+</launch>

@@ -181,13 +181,14 @@ class PadAlignmentEstimator:
         ])
         transform = pose_matrix(translation, quaternion)
         translation_std_m = (
-            float(np.std(translation_errors)) if translation_errors.size else None
+            float(np.sqrt(np.mean(translation_errors ** 2))) if translation_errors.size else None
         )
         rotation_std_deg = (
-            float(np.std(rotation_errors)) if rotation_errors.size else None
+            float(np.sqrt(np.mean(rotation_errors ** 2))) if rotation_errors.size else None
         )
         ready = (
             inlier_indices.size >= self.min_samples
+            and inlier_indices.size >= .8 * len(self._candidates)
             and translation_std_m <= self.max_translation_std_m
             and rotation_std_deg <= self.max_rotation_std_deg
         )

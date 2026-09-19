@@ -39,11 +39,19 @@ endif()
 
 if(CATKIN_ENABLE_TESTING)
   catkin_add_nosetests(test/test_pose_alignment.py)
+  catkin_add_nosetests(test/test_physical_pad.py)
+  catkin_add_nosetests(test/test_pose_transition.py)
+  catkin_add_nosetests(test/test_yaw_control.py)
+  catkin_add_nosetests(test/test_landing_trial.py)
 endif()
 
 catkin_install_python(PROGRAMS
   scripts/aruco_detector_node.py
+  scripts/physical_pad_estimator.py
   scripts/generate_paper_pad.py
+  scripts/manual_flight_audit.py
+  scripts/manual_flight_preview.py
+  scripts/landing_trial_node.py
   scripts/landing_controller_node.py
   scripts/landing_vision_pose_adapter.py
   scripts/pad_relative_vehicle_state.py
