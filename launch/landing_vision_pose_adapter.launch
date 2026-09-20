@@ -8,7 +8,12 @@
   <arg name="auto_switch" default="false"/>
   <arg name="auto_fallback_to_optitrack" default="false"/>
   <arg name="marker_loss_timeout_s" default="0.5"/>
-  <node pkg="aruco_landing" type="landing_vision_pose_adapter.py" name="landing_vision_pose_adapter" output="screen" required="true">
+  <arg name="require_trial_enable" default="false"/>
+  <arg name="reject_inconsistent_marker" default="false"/>
+  <arg name="launch_prefix" default=""/>
+  <node launch-prefix="$(arg launch_prefix)" pkg="aruco_landing" type="landing_vision_pose_adapter.py" name="landing_vision_pose_adapter" output="screen" required="true">
+    <param name="require_trial_enable" value="$(arg require_trial_enable)"/>
+    <param name="reject_inconsistent_marker" value="$(arg reject_inconsistent_marker)"/>
     <param name="mocap_topic" value="$(arg mocap_topic)"/>
     <param name="marker_pose_topic" value="$(arg marker_pose_topic)"/>
     <param name="output_topic" value="$(arg output_topic)"/>

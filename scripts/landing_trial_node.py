@@ -4,7 +4,7 @@
 Never arms, enters OFFBOARD or publishes vision. Force-disarm is an explicit
 stack policy, requested through the common safety authority. Pilot starts
 OFFBOARD. Default dry-run writes shadow setpoints only. Current experiment
-requires the shared vision mux to remain on OptiTrack.
+supports OptiTrack-only and the explicitly enabled, trial-gated pose router.
 """
 import json
 import math
@@ -40,6 +40,12 @@ class LandingTrial:
         rospy.init_node('landing_trial');self.lock=threading.RLock()
         self.dry=bool(rospy.get_param('~dry_run',True));self.inputs={};self.receipts={}
         self.auto_start=bool(rospy.get_param('~auto_start_on_offboard',False))
+        self.transition=bool(rospy.get_param('~estimation_transition',False))
+        self.routed_topic=rospy.get_param('~routed_pose_topic','/landing/vision_pose_selected')
+        self.router_status={}
+        self.routed_by_stamp={}
+        self.transition_enable_pub=rospy.Publisher('/landing/pose_transition/enable',Bool,queue_size=1,latch=True)
+        self.transition_enable_pub.publish(False)
         self.entry_ready=False;self.prepare_pending=False;self.prepare_retry=-1e30
         self.standby_since=None;self.last_fcu_mode=None;self.entry_time=None
         self.global_frame=rospy.get_param('~global_frame','odom')
@@ -86,7 +92,9 @@ class LandingTrial:
             ('inliers','/landing/estimator/inlier_ids',Int32MultiArray),
             ('marker_body','/landing/vehicle_pose_pad',PoseWithCovarianceStamped),
             ('marker_camera','/landing/camera_pose_pad',PoseWithCovarianceStamped),
-            ('command','/landing/trial/landing_cmd_pad',TwistStamped)]
+            ('command','/landing/trial/landing_cmd_pad',TwistStamped),
+            ('routed',self.routed_topic,PoseStamped),
+            ('router','/landing/pose_transition/status',String)]
         self.subscribers=[rospy.Subscriber(topic,kind,self.receive,key,queue_size=10,tcp_nodelay=True)for key,topic,kind in topics]
         rospy.Service('~start',Trigger,self.start);rospy.Service('~reset',Trigger,self.reset);rospy.Service('~abort',Trigger,self.abort)
         rospy.Timer(rospy.Duration(1/60.),self.tick)
@@ -118,12 +126,18 @@ class LandingTrial:
     def receive(self,m,key):
         with self.lock:
             now=time.monotonic()
-            if key in ('mocap','local','vision','pad','marker_body','marker_camera'):
+            if key in ('mocap','local','vision','pad','marker_body','marker_camera','routed'):
                 try:
                     if not valid_transform(transform(m)):return
                 except (ValueError,TypeError):return
             if key=='mocap'and m.header.frame_id!=self.global_frame:return
             self.inputs[key]=m;self.receipts[key]=now
+            if key=='router':
+                try:self.router_status=json.loads(m.data)
+                except (ValueError,TypeError):self.router_status={}
+            if key=='routed':
+                self.routed_by_stamp[m.header.stamp.to_nsec()]=transform(m)
+                if len(self.routed_by_stamp)>500:self.routed_by_stamp.pop(next(iter(self.routed_by_stamp)))
             if key=='pad':
                 T=transform(m)
                 if m.header.frame_id==self.global_frame and valid_transform(T):
@@ -141,8 +155,9 @@ class LandingTrial:
                 self.history.add_mocap(m.header.stamp.to_sec(),T)
                 self.mocap_by_stamp[m.header.stamp.to_nsec()]=T
                 if len(self.mocap_by_stamp)>500:self.mocap_by_stamp.pop(next(iter(self.mocap_by_stamp)))
-            if key in ('mocap','vision')and 'vision'in self.inputs:
-                v=self.inputs['vision'];ref=self.mocap_by_stamp.get(v.header.stamp.to_nsec())
+            if key in ('mocap','routed','vision')and 'vision'in self.inputs:
+                v=self.inputs['vision'];history=self.routed_by_stamp if self.transition else self.mocap_by_stamp
+                ref=history.get(v.header.stamp.to_nsec())
                 if ref is not None:
                     self.vision_mismatch=v.header.frame_id!=self.global_frame or not np.allclose(ref,transform(v),atol=1e-7,rtol=0)
                     if not self.vision_mismatch:self.last_matched=now
@@ -160,7 +175,14 @@ class LandingTrial:
         safety=self.inputs['safety']
         if safety.level!=0 or safety.kill_switch or safety.control_lane in ('KILL','LAND'):return False
         selected=self.inputs.get('selected')
-        return bool(selected and selected.data==self.mocap_topic and now-self.last_matched<.3 and not self.vision_mismatch)
+        expected=self.routed_topic if self.transition else self.mocap_topic
+        if self.transition:
+            if not self.fresh('router',now,.2) or self.router_status.get('output_topic')!=self.routed_topic:return False
+            if self.router_status.get('source') not in ('optitrack','marker'):return False
+        # Permit the bounded marker-loss decision window while PX4 local pose and
+        # safety remain fresh. Descent still requires current marker/control data.
+        grace=self.trial.marker_loss_s+.15 if self.transition and self.router_status.get('source')=='marker' else .3
+        return bool(selected and selected.data==expected and now-self.last_matched<grace and not self.vision_mismatch)
 
     def pending_marker(self,now):
         c=self.marker_cache
@@ -171,7 +193,7 @@ class LandingTrial:
     def marker(self,now):
         if not self.aligned or self.pad is None:return False,None,None
         if not all(self.fresh(k,now)for k in ('visible','inliers','marker_body','marker_camera')):return False,None,None
-        if not self.inputs['visible'].data or len(self.inputs['inliers'].data)<3:return False,None,None
+        if not self.inputs['visible'].data or len(self.inputs['inliers'].data)<1:return False,None,None
         b=self.inputs['marker_body'];camera=self.inputs['marker_camera']
         if b.header.frame_id!=camera.header.frame_id:return False,None,None
         if abs(b.header.stamp.to_sec()-camera.header.stamp.to_sec())>.01:return self.pending_marker(now)
@@ -294,8 +316,11 @@ class LandingTrial:
             mocap_height=None
             if self.aligned and self.pad is not None and self.fresh('mocap',now):
                 mocap_height=float((np.linalg.inv(self.pad)@transform(self.inputs['mocap'])@self.X)[2,3])
+            if self.transition and self.router_status.get('fallback_latched') and self.trial.phase in ('APPROACH','DESCEND','AUTO_LAND'):
+                self.trial.fail('marker_source_lost_trial_failed');self.capture_hold()
+            estimation_ready=not self.transition or (self.router_status.get('source')=='marker' and self.router_status.get('last_output_source')=='marker' and self.router_status.get('switch_check',{}).get('consistent',False) and self.fresh('routed',now) and healthy)
             previous=self.trial.phase
-            phase=self.trial.step(now,offboard=state.mode=='OFFBOARD',armed=state.armed,healthy=healthy,marker_good=good,marker_height=height,marker_time=marker_time,mocap_height=mocap_height,landed=landed,auto_land=state.mode=='AUTO.LAND')
+            phase=self.trial.step(now,offboard=state.mode=='OFFBOARD',armed=state.armed,healthy=healthy,marker_good=good,marker_height=height,marker_time=marker_time,mocap_height=mocap_height,estimation_ready=estimation_ready,landed=landed,auto_land=state.mode=='AUTO.LAND')
             if previous!=phase:
                 self.capture_hold()
                 if phase=='APPROACH'and self.hold is not None:self.altitude=self.hold[2,3];self.heading=yaw(self.hold)
@@ -310,31 +335,34 @@ class LandingTrial:
             if phase=='FAILED_HOLD' and state.mode not in ('OFFBOARD','AUTO.LAND'):
                 self.trial.cancel('pilot_left_autonomous_mode');phase=self.trial.phase
             if self.trial.phase=='FAILED_HOLD' and state.mode=='AUTO.LAND':self.request_mode('POSCTL',now)
-            if phase=='FAILED_HOLD'and self.inputs.get('selected')and self.inputs['selected'].data!=self.mocap_topic and not self.dry and now-self.last_mux_call>1.:
+            if not self.transition and phase=='FAILED_HOLD'and self.inputs.get('selected')and self.inputs['selected'].data!=self.mocap_topic and not self.dry and now-self.last_mux_call>1.:
                 self.last_mux_call=now
                 def restore_mocap():
                     try:self.mux_service(topic=self.mocap_topic)
                     except rospy.ServiceException:pass
                 threading.Thread(target=restore_mocap,daemon=True).start()
-            self.visible_pub.publish(Bool(phase=='DESCEND'and good and healthy))
-            if self.aligned and self.pad is not None and self.fresh('mocap',now):
-                P_B=np.linalg.inv(self.pad)@transform(self.inputs['mocap']);stamp=self.inputs['mocap'].header.stamp
+            self.transition_enable_pub.publish(Bool(self.transition and not self.dry and state.armed and state.mode=='OFFBOARD' and phase in ('APPROACH','DESCEND') and healthy))
+            control_key='routed' if self.transition else 'mocap'
+            control_fresh=self.fresh(control_key,now)
+            self.visible_pub.publish(Bool(phase=='DESCEND'and good and healthy and estimation_ready and control_fresh))
+            if self.aligned and self.pad is not None and control_fresh:
+                P_B=np.linalg.inv(self.pad)@transform(self.inputs[control_key]);stamp=self.inputs[control_key].header.stamp
                 self.body_pub.publish(self.output(P_B,stamp));self.camera_pub.publish(self.output(P_B@self.X,stamp))
             sp=None
             if phase=='PRESTREAM' and self.fresh('local',now):self.capture_hold()
             if self.auto_start and state.mode not in ('OFFBOARD','AUTO.LAND') and healthy:
                 self.capture_hold();sp=self.hold_setpoint(self.hold)
             if phase not in ('IDLE','CANCELLED','COMPLETE')and self.hold is not None and self.fresh('local',now):sp=self.hold_setpoint(self.hold)
-            if phase in ('APPROACH','DESCEND')and healthy:
-                L_B=transform(self.inputs['local']);G_B=transform(self.inputs['mocap']);L_G=L_B[:3,:3]@G_B[:3,:3].T
+            if phase in ('APPROACH','DESCEND')and healthy and control_fresh:
+                L_B=transform(self.inputs['local']);G_B=transform(self.inputs[control_key]);L_G=L_B[:3,:3]@G_B[:3,:3].T
                 velocity=None;rate=0.
                 if phase=='APPROACH':
                     goal=self.target  # known global pad XY; pre-OFFBOARD detections do not redirect approach
                     v=self.kp*(goal-G_B[:2,3]);v*=min(1.,self.speed/max(np.linalg.norm(v),1e-9));velocity=L_G@np.r_[v,0.];velocity[2]=0.
-                    if good:velocity[:]=0.  # hold altitude/position while validating marker dwell
+                    if good or (self.transition and self.router_status.get('source')=='marker'):velocity[:]=0.  # hold altitude/position while validating marker dwell
                     target_yaw=self.heading
                     error=math.atan2(math.sin(target_yaw-yaw(L_B)),math.cos(target_yaw-yaw(L_B)));rate=np.clip(error,-self.yaw_rate,self.yaw_rate)
-                elif good and self.fresh('command',now,.1):
+                elif good and estimation_ready and self.fresh('command',now,.1):
                     c=self.inputs['command'];v=c.twist.linear
                     if c.header.frame_id=='landing_pad':velocity=L_G@self.pad[:3,:3]@np.array([v.x,v.y,v.z]);rate=float(c.twist.angular.z)
                 if velocity is not None and np.isfinite(velocity).all()and math.isfinite(rate):
@@ -355,7 +383,7 @@ class LandingTrial:
             mission_state={'FAILED_HOLD':'hold_failed','AUTO_LAND':'landing','COMPLETE':'complete','CUT_WAIT':'terminating'}.get(self.trial.phase,'active'if self.trial.phase in ('APPROACH','DESCEND')else 'idle')
             self.mission_pub.publish(json.dumps(dict(state=mission_state,dry_run=self.dry,source='landing_trial')))
             self.status.publish(json.dumps(dict(phase=self.trial.phase,reason=self.trial.reason,dry_run=self.dry,
-                estimation_source='optitrack',landing_finish_mode=self.trial.finish_mode,mocap_camera_height_m=mocap_height,force_disarm_ack=self.cut_result,offboard_entry_ready=bool(self.entry_ready and healthy and self.standby_since is not None and now-self.standby_since>=1.),healthy=bool(healthy),marker_qualified=bool(good),marker_height_m=height,
+                estimation_source=self.router_status.get('source','unknown') if self.transition else 'optitrack',estimation_transition=self.transition,landing_finish_mode=self.trial.finish_mode,mocap_camera_height_m=mocap_height,force_disarm_ack=self.cut_result,offboard_entry_ready=bool(self.entry_ready and healthy and self.standby_since is not None and now-self.standby_since>=1.),healthy=bool(healthy),marker_qualified=bool(good),marker_height_m=height,
                 marker_confirm_s=self.trial.marker_confirm_s,marker_loss_s=self.trial.marker_loss_s,
                 pad_alignment_ready=self.aligned,command_frame='MAVROS local ENU',live_output=self.normal_topic if self.live else None)))
 

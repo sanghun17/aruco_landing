@@ -6,11 +6,15 @@ from aruco_landing.pose_alignment import matrix_pose, quaternion_distance_deg
 
 class PoseTransition:
     def __init__(self, allow=False, max_age=.2, pair_dt=.035, max_position=.15,
-                 max_angle=12., stable_duration=1., min_samples=30, fallback_timeout=None):
+                 max_angle=12., stable_duration=1., min_samples=30, fallback_timeout=None, reject_inconsistent_marker=False, latch_fallback=False):
         self.allow, self.max_age, self.pair_dt = allow, max_age, pair_dt
         self.max_position, self.max_angle = max_position, max_angle
         self.stable_duration, self.min_samples = stable_duration, min_samples
         self.fallback_timeout = fallback_timeout
+        self.reject_inconsistent_marker = reject_inconsistent_marker
+        self.latch_fallback = latch_fallback
+        self.fallback_latched = False
+        self.enabled = True
         self.last_valid_marker_receipt = None
         self.source = 'optitrack'
         self.samples = {}
@@ -46,9 +50,9 @@ class PoseTransition:
         if source == 'optitrack':
             self.mocap.append(sample)
         elif source == 'marker':
-            if self.quality_ok(now):
-                self.last_valid_marker_receipt = now
             agreement = self.agreement(now)
+            if self.quality_ok(now) and (not self.reject_inconsistent_marker or agreement['consistent']):
+                self.last_valid_marker_receipt = now
             if agreement['consistent']:
                 # A gap must restart the qualification interval.
                 if previous is None or stamp-previous[0] > self.max_age:
@@ -60,7 +64,8 @@ class PoseTransition:
                 self.good_since, self.good_count = None, 0
         if source != self.source or stamp <= self.last_output_stamp:
             return False
-        if source == 'marker' and not self.quality_ok(now):
+        if source == 'marker' and (not self.enabled or self.fallback_latched or not self.quality_ok(now) or
+                (self.reject_inconsistent_marker and not agreement['consistent'])):
             return False
         self.last_output_stamp = stamp
         return True
@@ -88,7 +93,7 @@ class PoseTransition:
         result.update(allowed=self.allow, alignment_ready=self.quality.get('aligned',(False,0))[0],
                       marker_fresh=self.fresh(marker,now), mocap_fresh=self.fresh(self.samples.get('optitrack'),now),
                       quality_valid=self.quality_ok(now), stable_samples=self.good_count, stable_duration_s=duration)
-        result['ready'] = bool(self.allow and result['consistent'] and self.good_count >= self.min_samples and duration >= self.stable_duration)
+        result['ready'] = bool(self.allow and self.enabled and not self.fallback_latched and result['consistent'] and self.good_count >= self.min_samples and duration >= self.stable_duration)
         return result
 
     def fallback(self, now):
@@ -101,9 +106,24 @@ class PoseTransition:
         if age < self.fallback_timeout or not self.fresh(self.samples.get('optitrack'),now):
             return None
         self.source = 'optitrack'
+        self.fallback_latched = self.latch_fallback
         self.good_since, self.good_count = None, 0
         return {'reason':'marker_timeout', 'marker_absence_s':age,
                 'fallback_timeout_s':self.fallback_timeout}
+
+    def set_enabled(self, enabled):
+        if enabled != self.enabled or not enabled:
+            self.good_since, self.good_count = None, 0
+        self.enabled = enabled
+
+    def return_to_mocap(self, now, latch=False):
+        if latch:
+            self.fallback_latched = True
+        if not self.fresh(self.samples.get('optitrack'), now):
+            return False
+        self.source = 'optitrack'
+        self.good_since, self.good_count = None, 0
+        return True
 
     def select(self, marker, now):
         if marker:

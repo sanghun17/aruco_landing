@@ -36,7 +36,7 @@ class Trial:
         self.phase='FAILED_HOLD';self.reason=reason;self.good_since=None
 
     def step(self, now, *, offboard, armed, healthy, marker_good, marker_height=None,
-             landed=False, auto_land=False, marker_time=None, mocap_height=None):
+             landed=False, auto_land=False, marker_time=None, mocap_height=None, estimation_ready=True):
         old=self.phase
         if old in ('IDLE','COMPLETE','CANCELLED','FAILED_HOLD'):
             return self.phase
@@ -62,7 +62,7 @@ class Trial:
             self.last_good=stamp
         else:self.good_since=None
         if old=='APPROACH':
-            if self.good_since is not None and self.last_good-self.good_since>=self.marker_confirm_s:
+            if estimation_ready and self.good_since is not None and self.last_good-self.good_since>=self.marker_confirm_s:
                 self.phase='DESCEND';self.reason='marker_qualified'
         elif old in ('DESCEND','AUTO_LAND'):
             if not landed and (self.last_good is None or now-self.last_good>=self.marker_loss_s):

@@ -14,7 +14,7 @@ from sensor_msgs.msg import CameraInfo, Image, CompressedImage
 from std_msgs.msg import Bool, String, Int32MultiArray
 from std_srvs.srv import Trigger, TriggerResponse
 
-from aruco_landing.physical_pad import PhysicalPadDetector, SessionAlignment, inverse, relative_covariance, valid_transform
+from aruco_landing.physical_pad import PhysicalPadDetector, SessionAlignment, inverse, relative_covariance, valid_transform, center_crop
 from aruco_landing.pose_alignment import pose_matrix, matrix_pose
 
 
@@ -50,6 +50,10 @@ class PhysicalPadEstimator:
         self.max_age = float(rospy.get_param('~max_image_age_s', .20))
         self.estimate_hz = float(rospy.get_param('~estimate_rate_hz', 60.))
         self.debug_hz = float(rospy.get_param('~detected_image_rate_hz', 10.))
+        self.processing_width = int(rospy.get_param('~processing_width', 720))
+        self.processing_height = int(rospy.get_param('~processing_height', 720))
+        if not 0 < self.processing_width <= 1280 or not 0 < self.processing_height <= 720:
+            raise ValueError('invalid processing crop dimensions')
         self.jpeg_quality = int(rospy.get_param('~jpeg_quality', 80))
         if not 0 < self.debug_hz <= 60 or not 0 < self.estimate_hz <= 60:
             raise ValueError('image/estimate rates must be in (0,60]')
@@ -70,7 +74,7 @@ class PhysicalPadEstimator:
         if not np.isfinite(self.time_offset) or abs(self.time_offset) > .2:
             raise ValueError('invalid image time offset')
         cv2.setNumThreads(int(rospy.get_param('~opencv_threads', 2)))
-        self.detector = PhysicalPadDetector(manifest, min_markers=int(rospy.get_param('~min_marker_inliers', 3)))
+        self.detector = PhysicalPadDetector(manifest, min_markers=int(rospy.get_param('~min_marker_inliers', 1)))
         self.detector.params.adaptiveThreshWinSizeMin = int(rospy.get_param('~adaptive_threshold_min', 7))
         self.detector.params.adaptiveThreshWinSizeMax = int(rospy.get_param('~adaptive_threshold_max', 27))
         self.detector.params.adaptiveThreshWinSizeStep = int(rospy.get_param('~adaptive_threshold_step', 20))
@@ -201,7 +205,9 @@ class PhysicalPadEstimator:
         array = np.frombuffer(msg.data, np.uint8).reshape(msg.height,msg.step)[:,:msg.width*channels]
         array = array.reshape(msg.height,msg.width,channels)
         gray = array[:,:,0] if channels==1 else cv2.cvtColor(array,cv2.COLOR_RGB2GRAY if msg.encoding=='rgb8' else cv2.COLOR_BGR2GRAY)
-        result, corners, ids = self.detector.detect(gray, *self.camera_info)
+        K, D = self.camera_info
+        gray, cropped_K = center_crop(gray, K, self.processing_width, self.processing_height)
+        result, corners, ids = self.detector.detect(gray, cropped_K, D)
         if rospy.get_time()-stamp_s > self.max_age:
             raise ValueError('image expired during processing')
         self.processed += 1
@@ -257,6 +263,8 @@ class PhysicalPadEstimator:
         a=np.frombuffer(msg.data,np.uint8).reshape(msg.height,msg.step)[:,:msg.width*channels].reshape(msg.height,msg.width,channels)
         bgr=(cv2.cvtColor(a,cv2.COLOR_RGB2BGR) if msg.encoding=='rgb8' else
              cv2.cvtColor(a,cv2.COLOR_GRAY2BGR) if channels==1 else a.copy())
+        bgr, _ = center_crop(bgr, np.eye(3), self.processing_width, self.processing_height)
+        bgr = np.ascontiguousarray(bgr)
         for pts,mid in zip(corners,ids):
             polygon=np.round(np.asarray(pts).reshape(4,2)).astype(np.int32)
             color=(60,220,60) if mid in inliers else (0,170,255)
@@ -265,8 +273,8 @@ class PhysicalPadEstimator:
         cv2.putText(bgr,'accepted markers: %d | alignment: %s'%(len(inliers),'ready' if self.alignment.ready else 'learning'),(16,30),cv2.FONT_HERSHEY_SIMPLEX,.65,(255,220,80),2)
         # Display retains the raw image's stamp; estimated poses use the corrected measurement stamp.
         if self.debug_pub.get_num_connections():
-            out=Image();out.header=msg.header;out.height=msg.height;out.width=msg.width
-            out.encoding='bgr8';out.step=msg.width*3;out.data=bgr.tobytes()
+            out=Image();out.header=msg.header;out.height=bgr.shape[0];out.width=bgr.shape[1]
+            out.encoding='bgr8';out.step=bgr.shape[1]*3;out.data=bgr.tobytes()
             self.debug_pub.publish(out)
         if self.jpeg_pub.get_num_connections():
             ok,jpeg=cv2.imencode('.jpg',bgr,[cv2.IMWRITE_JPEG_QUALITY,self.jpeg_quality])
@@ -287,6 +295,7 @@ class PhysicalPadEstimator:
         rate=(len(done)-1)/(done[-1]-done[0]) if len(done)>1 and time.monotonic()-done[-1]<1 else 0.
         status={'alignment_ready':ready,'alignment_mode':'frozen_for_this_session' if ready else 'learning',
                 'alignment_pairs':samples,'marker_fresh':fresh,'last_error':self.last_error,
+                'processing_width':self.processing_width,'processing_height':self.processing_height,'center_crop':True,
                 'images_received':self.received,'images_processed':self.processed,'valid_poses':self.accepted,
                 'processing_hz':rate,'processing_ms_mean':float(np.mean(durations)) if durations else None,
                 'processing_ms_p95':float(np.percentile(durations,95)) if durations else None,

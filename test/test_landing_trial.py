@@ -72,3 +72,16 @@ class ForceDisarmPolicyTest(unittest.TestCase):
         t=self.trial();self.step(t)
         self.assertEqual(self.step(t,landed=True),'CUT_WAIT')
         self.assertEqual(self.step(t,armed=False,healthy=False),'COMPLETE')
+
+
+class TransitionHandshakeTest(unittest.TestCase):
+    def test_marker_dwell_does_not_descend_before_estimation_ack(self):
+        t=Trial(phase='APPROACH')
+        for i in range(150):
+            now=10+i*.01
+            t.step(now,offboard=True,armed=True,healthy=True,marker_good=True,
+                   marker_time=now,estimation_ready=False)
+        self.assertEqual(t.phase,'APPROACH')
+        t.step(now+.01,offboard=True,armed=True,healthy=True,marker_good=True,
+               marker_time=now+.01,estimation_ready=True)
+        self.assertEqual(t.phase,'DESCEND')

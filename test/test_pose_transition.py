@@ -77,3 +77,38 @@ class TestTransition(unittest.TestCase):
             t=now
 
 if __name__=='__main__':unittest.main()
+
+
+class IntegratedTransitionTest(TestTransition):
+    def test_trial_permission_resets_preflight_dwell(self):
+        r,t=self.ready_router();r.set_enabled(False)
+        self.assertFalse(r.select(True,t)[0])
+        r.set_enabled(True)
+        self.assertEqual(r.good_count,0)
+        self.assertFalse(r.select(True,t)[0])
+
+    def test_selected_marker_outlier_is_not_published_or_counted_as_valid(self):
+        r,t=self.ready_router();r.reject_inconsistent_marker=True
+        self.assertTrue(r.select(True,t)[0]);last=r.last_valid_marker_receipt
+        bad=np.eye(4);bad[0,3]=.3
+        for key in ('visible','inliers'):r.set_quality(key,True,t+.1)
+        r.ingest('optitrack',t+.1,np.eye(4),t+.1)
+        self.assertFalse(r.ingest('marker',t+.1,bad,t+.1))
+        self.assertEqual(r.last_valid_marker_receipt,last)
+
+    def test_fallback_latches_and_requires_new_trial_reset(self):
+        r,t=self.ready_router();r.latch_fallback=True;r.fallback_timeout=.5
+        self.assertTrue(r.select(True,t)[0])
+        r.ingest('optitrack',t+.51,np.eye(4),t+.51)
+        self.assertIsNotNone(r.fallback(t+.51));self.assertTrue(r.fallback_latched)
+        for i in range(150):
+            now=t+.6+i*.01
+            for key in ('aligned','visible','inliers'):r.set_quality(key,True,now)
+            r.ingest('optitrack',now,np.eye(4),now);r.ingest('marker',now,np.eye(4),now)
+        self.assertFalse(r.select(True,now)[0])
+
+    def test_disabled_marker_cannot_leak_without_fresh_mocap(self):
+        r,t=self.ready_router();self.assertTrue(r.select(True,t)[0]);r.set_enabled(False)
+        self.assertFalse(r.return_to_mocap(t+1,latch=True))
+        for key in ('visible','inliers'):r.set_quality(key,True,t+1)
+        self.assertFalse(r.ingest('marker',t+1,np.eye(4),t+1))

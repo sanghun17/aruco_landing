@@ -2,7 +2,7 @@
 import unittest
 import numpy as np
 import cv2
-from aruco_landing.physical_pad import PhysicalPadDetector, SessionAlignment, inverse, relative_covariance
+from aruco_landing.physical_pad import PhysicalPadDetector, SessionAlignment, inverse, relative_covariance, center_crop
 from aruco_landing.pose_alignment import pose_matrix
 
 
@@ -11,6 +11,28 @@ def pose(p, yaw=0):
 
 
 class PhysicalPadTest(unittest.TestCase):
+    def test_center_crop_preserves_distorted_pnp_geometry(self):
+        manifest={'dictionary':'DICT_7X7_50','markers':[{'id':i,'side_m':.06,'yaw_deg':0,'center_m':{'x':x,'y':y}} for i,(x,y) in enumerate([(-.1,-.1),(-.1,.1),(.1,-.1),(.1,.1)],1)]}
+        detector=PhysicalPadDetector(manifest)
+        K=np.array([[684.,0,668.],[0,686.,353.],[0,0,1.]])
+        D=np.array([-.348,.139,.00094,-.00045,-.0276])
+        image=np.zeros((720,1280),np.uint8);image[:,1100:]=255
+        cropped, Kc=center_crop(image,K)
+        self.assertEqual(cropped.shape,(720,720))
+        self.assertEqual(int(cropped.max()),0)
+        self.assertEqual(Kc[0,2],388.)
+        self.assertEqual(K[0,2],668.)
+        rv=np.array([2.6,.2,-.1]);tv=np.array([.1,.03,1.2])
+        corners=[cv2.projectPoints(detector.models[i],rv,tv,K,D)[0]-np.array([280.,0.]) for i in range(1,5)]
+        result=detector.estimate(corners,list(range(1,5)),Kc,D)
+        self.assertIsNotNone(result)
+        np.testing.assert_allclose(result['camera_from_pad'][:3,3],tv,atol=1e-5)
+        single=detector.estimate(corners[:1],[1],Kc,D)
+        self.assertIsNotNone(single)
+        np.testing.assert_allclose(single['camera_from_pad'][:3,3],tv,atol=1e-5)
+        np.testing.assert_allclose(result['camera_from_pad'][:3,:3],cv2.Rodrigues(rv)[0],atol=1e-5)
+        with self.assertRaises(ValueError):center_crop(image,K,1281,720)
+
     def test_learns_current_pad_then_survives_mocap_loss_and_resets(self):
         a=SessionAlignment(min_samples=5,min_duration_s=.2,window_size=20)
         Y=pose([2,-1,.2],.3)
@@ -45,7 +67,11 @@ class PhysicalPadTest(unittest.TestCase):
         X=pose([.02,-.12,.01],.1)
         PB=inverse(expected)@inverse(X)
         np.testing.assert_allclose(X@expected@PB,np.eye(4),atol=1e-9)
-        self.assertIsNone(detector.estimate(corners[:2],[1,2],K,D))
+        self.assertIsNotNone(detector.estimate(corners[:2],[1,2],K,D))
+        single=detector.estimate(corners[:1],[1],K,D)
+        self.assertIsNotNone(single)
+        np.testing.assert_allclose(single['camera_from_pad'],expected,atol=1e-5)
+        self.assertIsNone(detector.estimate([],[],K,D))
         self.assertIsNone(detector.estimate(corners,[1,2,2,4],K,D))
 
     def test_covariance_propagates_orientation_lever_arm(self):

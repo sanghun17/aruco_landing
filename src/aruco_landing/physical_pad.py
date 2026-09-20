@@ -10,6 +10,18 @@ from aruco_landing.pose_alignment import (
 CORNERS = np.array([[-.5, .5], [.5, .5], [.5, -.5], [-.5, -.5]])
 
 
+def center_crop(image, K, width=720, height=720):
+    """Crop without rescaling; translate principal point, retain lens distortion."""
+    h, w = image.shape[:2]
+    if not 0 < width <= w or not 0 < height <= h:
+        raise ValueError('processing crop exceeds calibrated image dimensions')
+    x, y = (w-width)//2, (h-height)//2
+    cropped_K = np.array(K, dtype=np.float64, copy=True)
+    cropped_K[0, 2] -= x
+    cropped_K[1, 2] -= y
+    return image[y:y+height, x:x+width], cropped_K
+
+
 def inverse(T):
     result = np.eye(4)
     result[:3, :3] = T[:3, :3].T
@@ -49,7 +61,7 @@ def relative_covariance(camera_from_pad, camera_from_body, covariance):
 
 
 class PhysicalPadDetector:
-    def __init__(self, manifest, min_markers=3, max_rms_px=2.5):
+    def __init__(self, manifest, min_markers=1, max_rms_px=2.5):
         dictionary_id = getattr(cv2.aruco, manifest['dictionary'])
         self.dictionary = cv2.aruco.getPredefinedDictionary(dictionary_id)
         self.params = (cv2.aruco.DetectorParameters() if hasattr(cv2.aruco, 'ArucoDetector')
