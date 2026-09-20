@@ -1,0 +1,35 @@
+# Calibrated physical pad; use pad_size_m=0.7. Original simulation layout unchanged.
+name: proposed_two_marker_pad_1_physical_20260920
+dictionary: DICT_4X4_100
+canvas_units: 0.7
+marker_border_bits: 1
+markers:
+- id: 0
+  x: 0.4251587357097697
+  y: 0.1787714938772802
+  size: 0.21815358214920713
+  yaw_deg: 0.3062018085784075
+- id: 1
+  x: 0.3256644732156268
+  y: 0.31515171504811623
+  size: 0.0574
+  yaw_deg: 0.12718768647860657
+required_pad_size_m: 0.7
+calibration:
+  source_bag: 2026-09-20-23-45-36.bag
+  source_layout: proposed_pad_1_layout.yaml
+  source_layout_sha256: 7650efc79b2f3a2144a8edad5578d6d85889eb01518dedb934d4d43f2e76a75e
+  camera_info_topic: /landing/camera/camera_info
+  image_topic: /landing/camera/image_raw/compressed
+  metric_scale: nominal anchor marker size; not independently measured
+  anchor_marker_id: 1
+  anchor_nominal_side_m: 0.0574
+  frame: same layout/image convention as source; rigid best alignment to nominal centers;
+    not surveyed origin
+  yaw_zero_body_coordinates: X_forward = layout_y_up; Y_left = -layout_x_right
+  method: fixed-intrinsic planar square-marker bundle adjustment; robust loss; centers/yaw/relative
+    size
+  held_out_rule: 2-second blocks with floor(relative_s/2) modulo 5 equal to 4
+  held_out_corner_rmse_px:
+    nominal: 0.999721275478914
+    calibrated: 0.8651486440879852

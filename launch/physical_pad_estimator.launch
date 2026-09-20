@@ -1,6 +1,8 @@
 <launch>
   <arg name="config_root" default="/work/stack-assets/aruco-landing-jetson/config"/>
-  <arg name="pad_configuration" default="$(arg config_root)/physical_pad.yaml"/>
+  <!-- Named calibrated pads. Explicit pad_configuration still overrides this selection. -->
+  <arg name="pad" default="legacy" doc="legacy, baseline, proposed1"/>
+  <arg name="pad_configuration" default="$(eval {'legacy': arg('config_root') + '/physical_pad.yaml', 'baseline': find('aruco_landing') + '/config/paper_pad_layout_physical_20260920_runtime.yaml', 'proposed1': find('aruco_landing') + '/config/proposed_pad_1_layout_physical_20260920_runtime.yaml'}[arg('pad')])"/>
   <arg name="image_topic" default="/landing/camera/image_raw"/>
   <arg name="camera_info_topic" default="/landing/camera/camera_info"/>
   <arg name="mocap_topic" default="/vrpn_client_node/pure/pose"/>
