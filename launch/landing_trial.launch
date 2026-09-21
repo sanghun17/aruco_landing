@@ -7,7 +7,7 @@
   <arg name="landing_finish_mode" default="force_disarm"/>
   <arg name="auto_start_on_offboard" default="false"/>
   <arg name="dry_run" default="true"/>
-  <arg name="config_root" default="/work/stack-assets/aruco-landing-jetson/config"/>
+  <arg name="config_root" default="/work/stacks/aruco-landing-jetson/config"/>
   <arg name="marker_confirm_s" default="1.0"/>
   <arg name="marker_loss_s" default="0.5"/>
   <include if="$(arg estimation_transition)" file="$(find aruco_landing)/launch/landing_vision_pose_adapter.launch">

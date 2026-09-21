@@ -1,5 +1,5 @@
 <launch>
-  <arg name="config_root" default="/work/stack-assets/aruco-landing-jetson/config"/>
+  <arg name="config_root" default="/work/stacks/aruco-landing-jetson/config"/>
   <!-- Named calibrated pads. Explicit pad_configuration still overrides this selection. -->
   <arg name="pad" default="legacy" doc="legacy, baseline, proposed1"/>
   <arg name="pad_configuration" default="$(eval {'legacy': arg('config_root') + '/physical_pad.yaml', 'baseline': find('aruco_landing') + '/config/paper_pad_layout_physical_20260920_runtime.yaml', 'proposed1': find('aruco_landing') + '/config/proposed_pad_1_layout_physical_20260920_runtime.yaml'}[arg('pad')])"/>
