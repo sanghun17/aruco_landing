@@ -486,9 +486,18 @@ class LandingTrial:
                 sp.header.stamp=rospy.Time.now();self.pub.publish(sp)
                 if self.live is not None:self.live.publish(sp)
             mission_state={'FAILED_HOLD':'hold_failed','AUTO_LAND':'landing','COMPLETE':'complete','CUT_WAIT':'terminating'}.get(self.trial.phase,'active'if self.trial.phase in ('ARMING','TAKEOFF','CENTER','RANDOM_POSITION','APPROACH','DESCEND')else 'idle')
-            self.mission_pub.publish(json.dumps(dict(state=mission_state,dry_run=self.dry,source='landing_trial')))
+            entry_ready=bool(self.entry_ready and healthy and data_ready and self.standby_since is not None and now-self.standby_since>=1.)
+            mission_hint=dict(state=mission_state,dry_run=self.dry,source='landing_trial')
+            if self.repeat:
+                # Optional, stack-neutral LED contract. Indicate readiness only
+                # on the ground in pilot position mode, before the arm edge.
+                position=transform(self.inputs['mocap'])[:3,3] if self.fresh('mocap',now) else None
+                valid_origin=position is not None and all(math.isfinite(v) for v in position) and 0<=position[2]<=self.repeat.ground_max and all(lo<=v<=hi for v,(lo,hi) in zip(position[:2],self.repeat.bounds))
+                entry_ready=bool(entry_ready and state.mode=='POSCTL' and not state.armed and landed and self.fresh('velocity',now) and valid_origin)
+                mission_hint.update(ground_start_enabled=True,offboard_entry_ready=entry_ready)
+            self.mission_pub.publish(json.dumps(mission_hint))
             self.status.publish(json.dumps(dict(phase=self.trial.phase,reason=self.trial.reason,dry_run=self.dry,
-                estimation_source=self.router_status.get('source','unknown') if self.transition else 'optitrack',estimation_transition=self.transition,landing_finish_mode=self.trial.finish_mode,mocap_camera_height_m=mocap_height,force_disarm_ack=self.cut_result,offboard_entry_ready=bool(self.entry_ready and healthy and data_ready and self.standby_since is not None and now-self.standby_since>=1.),healthy=bool(healthy),marker_qualified=bool(good),marker_height_m=height,
+                estimation_source=self.router_status.get('source','unknown') if self.transition else 'optitrack',estimation_transition=self.transition,landing_finish_mode=self.trial.finish_mode,mocap_camera_height_m=mocap_height,force_disarm_ack=self.cut_result,offboard_entry_ready=entry_ready,healthy=bool(healthy),marker_qualified=bool(good),marker_height_m=height,
                 marker_confirm_s=self.trial.marker_confirm_s,marker_loss_s=self.trial.marker_loss_s,
                 repeat_test=self.repeat.status() if self.repeat else None,data_sync_ready=data_ready,
                 data_sync_reason=self.sync_reason if self.repeat else 'not_required',
