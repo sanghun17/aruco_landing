@@ -1,0 +1,6 @@
+name: aruco-landing-planner
+group: planner
+description: Pilot OFFBOARD triggered approach, marker qualification and landing through shared safety.
+needs: [perception/aruco-landing, control/flight-safety]
+run: [run.sh]
+provides: [landing-controller, landing-command]

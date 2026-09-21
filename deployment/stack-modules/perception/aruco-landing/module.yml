@@ -1,0 +1,30 @@
+name: aruco-landing-perception
+group: perception
+description: ArUco detection, calibrated pad/body pose estimation, session-only global alignment, and detected-image output.
+
+deps:
+  apt:
+    - ros-noetic-cv-bridge
+    - ros-noetic-image-transport
+    - ros-noetic-tf
+    - ros-noetic-tf2-geometry-msgs
+    - ros-noetic-roscpp
+    - ros-noetic-geometry-msgs
+    - ros-noetic-sensor-msgs
+    - ros-noetic-std-msgs
+    - ros-noetic-std-srvs
+    - ros-noetic-tf2-ros
+    - libyaml-cpp-dev
+    - ninja-build
+    - python3-opencv
+  source:
+    # NVIDIA's Jetson OpenCV 4.5.4 includes Python cv2.aruco but omits the C++
+    # aruco headers/library. amd64 already has them; arm64 gets a parallel,
+    # minimal upstream build so the 60 Hz C++ estimator is portable.
+    - install_aruco_cpp.sh
+
+workspace: /work/ws/aruco-landing
+clone: clone.sh
+# One runtime entrypoint, shared by scripts/perception_aruco-landing.sh and setup.sh.
+run: [run.sh]
+provides: [aruco-detection, landing-target, pad-relative-body-pose, marker-global-body-pose]
