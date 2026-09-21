@@ -10,6 +10,9 @@
   <arg name="config_root" default="/work/stacks/aruco-landing-jetson/config"/>
   <arg name="marker_confirm_s" default="1.0"/>
   <arg name="marker_loss_s" default="0.5"/>
+  <arg name="approach_speed_mps" default="0.5"/>
+  <arg name="landing_horizontal_speed_mps" default="0.5"/>
+  <arg name="descent_speed_mps" default="0.3"/>
   <include if="$(arg estimation_transition)" file="$(find aruco_landing)/launch/landing_vision_pose_adapter.launch">
     <arg name="allow_marker_switch" value="true"/>
     <arg name="auto_switch" value="$(arg router_auto_switch)"/>
@@ -24,8 +27,8 @@
   <node pkg="aruco_landing" type="landing_controller_node.py" name="landing_trial_controller" output="screen" required="true">
     <param name="enabled" value="true"/>
     <param name="landing_altitude_min_m" value="0.0"/>
-    <param name="descent_speed_mps" value="0.3"/>
-    <param name="horizontal_speed_limit_mps" value="0.5"/>
+    <param name="descent_speed_mps" value="$(arg descent_speed_mps)"/>
+    <param name="horizontal_speed_limit_mps" value="$(arg landing_horizontal_speed_mps)"/>
     <param name="vehicle_pose_topic" value="/landing/trial/body_pose_pad"/>
     <param name="camera_pose_topic" value="/landing/trial/camera_pose_pad"/>
     <param name="target_visible_topic" value="/landing/trial/control_valid"/>
@@ -46,7 +49,8 @@
     <param name="extrinsic_file" value="$(arg config_root)/calibration/20260919/base_link_to_see3cam_optical_frame.yaml"/>
     <param name="marker_confirm_s" value="$(arg marker_confirm_s)"/>
     <param name="marker_loss_s" value="$(arg marker_loss_s)"/>
-    <param name="approach_speed_mps" value="0.5"/>
+    <param name="approach_speed_mps" value="$(arg approach_speed_mps)"/>
+    <param name="landing_horizontal_speed_mps" value="$(arg landing_horizontal_speed_mps)"/>
     <rosparam param="initial_target_global_xy">[0.0, 0.0]</rosparam>
   </node>
 </launch>

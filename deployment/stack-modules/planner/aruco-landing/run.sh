@@ -33,4 +33,7 @@ exec taskset -c "${CPUS_CONTROL:?}" roslaunch aruco_landing landing_trial.launch
   router_auto_switch:="${LANDING_AUTO_SWITCH:-false}" \
   router_fallback:="${LANDING_AUTO_FALLBACK_TO_OPTITRACK:-false}" \
   marker_loss_s:="${LANDING_MARKER_LOSS_TIMEOUT_S:-0.5}" \
+  approach_speed_mps:="${LANDING_APPROACH_SPEED_MPS:-0.5}" \
+  landing_horizontal_speed_mps:="${LANDING_HORIZONTAL_SPEED_MPS:-0.5}" \
+  descent_speed_mps:="${LANDING_DESCENT_SPEED_MPS:-0.3}" \
   router_launch_prefix:="taskset -c ${CPUS_ESTIMATION:?}" "$@"

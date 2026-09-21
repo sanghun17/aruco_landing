@@ -58,10 +58,11 @@ class LandingTrial:
         self.cut_pending=False;self.cut_started=None;self.cut_result=None
         self.termination_service=rospy.ServiceProxy('/flight_safety_response/request_termination',Trigger)
         self.speed=float(rospy.get_param('~approach_speed_mps',.5));self.kp=float(rospy.get_param('~approach_kp',.8))
+        self.landing_speed=float(rospy.get_param('~landing_horizontal_speed_mps',.5))
         self.yaw_rate=float(rospy.get_param('~yaw_rate_limit_rad_s',.35))
         self.target=np.array(rospy.get_param('~initial_target_global_xy',[0.,0.]),float)
         if self.target.shape!=(2,)or not np.isfinite(self.target).all():raise ValueError('invalid initial target')
-        if not all(math.isfinite(v)and v>0 for v in (self.speed,self.kp,self.yaw_rate)):raise ValueError('invalid trial limits')
+        if not all(math.isfinite(v)and v>0 for v in (self.speed,self.landing_speed,self.kp,self.yaw_rate)):raise ValueError('invalid trial limits')
         with open(rospy.get_param('~extrinsic_file'))as f:mount=yaml.safe_load(f)
         self.X=np.array(mount['matrix_row_major']).reshape(4,4)
         if mount['validation_result']!='PASS'or not valid_transform(self.X):raise ValueError('invalid mount')
@@ -371,7 +372,8 @@ class LandingTrial:
                     # never a stale entry point after a velocity-controller crash.
                     sp=self.hold_setpoint(L_B)
                     sp.type_mask=PositionTarget.IGNORE_AFX|PositionTarget.IGNORE_AFY|PositionTarget.IGNORE_AFZ|PositionTarget.IGNORE_YAW
-                    sp.velocity.x,sp.velocity.y,sp.velocity.z=limit_horizontal_velocity(velocity,.5);sp.yaw_rate=float(np.clip(rate,-self.yaw_rate,self.yaw_rate))
+                    speed_limit=self.speed if phase=='APPROACH' else self.landing_speed
+                    sp.velocity.x,sp.velocity.y,sp.velocity.z=limit_horizontal_velocity(velocity,speed_limit);sp.yaw_rate=float(np.clip(rate,-self.yaw_rate,self.yaw_rate))
                     if phase=='APPROACH':sp.position.z=self.altitude
                     self.capture_hold()
             if phase=='AUTO_LAND':
