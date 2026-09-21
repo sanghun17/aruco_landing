@@ -3,5 +3,5 @@ set -e
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 DST="$ROOT/ws/aruco-landing/src/aruco_landing"
 REPO="${ARUCO_LANDING_REPO:-git@github.com:sanghun17/aruco_landing.git}"
-BRANCH="${ARUCO_LANDING_REVISION:-19c2bfb89590af63319cee3b5db9bb916df7f37f}"
+BRANCH="${ARUCO_LANDING_REVISION:-e89e2ed38bdae6145a364c18b8e4cb2e1f4cf458}"
 bash "$ROOT/scripts/lib/clone_repo.sh" "$DST" "$REPO" "$BRANCH"
