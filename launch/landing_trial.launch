@@ -13,6 +13,9 @@
   <arg name="approach_speed_mps" default="0.5"/>
   <arg name="landing_horizontal_speed_mps" default="0.5"/>
   <arg name="descent_speed_mps" default="0.3"/>
+  <arg name="repeat_test" default="false"/>
+  <arg name="repeat_config" default="$(arg config_root)/repeat_trial.yaml"/>
+  <arg name="geofence_config" default="$(arg config_root)/geofence.yaml"/>
   <include if="$(arg estimation_transition)" file="$(find aruco_landing)/launch/landing_vision_pose_adapter.launch">
     <arg name="allow_marker_switch" value="true"/>
     <arg name="auto_switch" value="$(arg router_auto_switch)"/>
@@ -41,6 +44,9 @@
     <remap from="/landing/controller/state" to="/landing/trial/controller/state"/>
   </node>
   <node pkg="aruco_landing" type="landing_trial_node.py" name="landing_trial" output="screen" required="true">
+    <param name="repeat_test" value="$(arg repeat_test)"/>
+    <param name="repeat_config" value="$(arg repeat_config)"/>
+    <param name="geofence_config" value="$(arg geofence_config)"/>
     <param name="estimation_transition" value="$(arg estimation_transition)"/>
     <param name="routed_pose_topic" value="$(arg routed_pose_topic)"/>
     <param name="auto_start_on_offboard" value="$(arg auto_start_on_offboard)"/>

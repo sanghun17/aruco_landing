@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Hardware landing sequence through the existing flight-safety NORMAL lane.
 
-Never arms, enters OFFBOARD or publishes vision. Force-disarm is an explicit
+Only the opt-in ground repeat experiment may arm; never enters OFFBOARD or publishes vision. Force-disarm is an explicit
 stack policy, requested through the common safety authority. Pilot starts
 OFFBOARD. Default dry-run writes shadow setpoints only. Current experiment
 supports OptiTrack-only and the explicitly enabled, trial-gated pose router.
 """
 import json
 import math
+import os
+from pathlib import Path
 import threading
 import time
 import numpy as np
@@ -15,7 +17,7 @@ import rospy
 import yaml
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, TwistStamped
 from mavros_msgs.msg import State, ExtendedState, PositionTarget
-from mavros_msgs.srv import SetMode, ParamGet
+from mavros_msgs.srv import SetMode, ParamGet, CommandBool
 from std_msgs.msg import Bool, String, Int32MultiArray
 from std_srvs.srv import Trigger, TriggerResponse
 from topic_tools.srv import MuxSelect
@@ -24,6 +26,7 @@ from aruco_landing.landing_trial import Trial, limit_horizontal_velocity
 from aruco_landing.physical_pad import SessionAlignment, valid_transform
 from aruco_landing.pose_alignment import pose_matrix, matrix_pose, quaternion_distance_deg
 from aruco_landing.yaw_control import yaw_feedback
+from aruco_landing.repeat_trial import RepeatTrial
 
 
 def transform(msg):
@@ -40,6 +43,14 @@ class LandingTrial:
         rospy.init_node('landing_trial');self.lock=threading.RLock()
         self.dry=bool(rospy.get_param('~dry_run',True));self.inputs={};self.receipts={}
         self.auto_start=bool(rospy.get_param('~auto_start_on_offboard',False))
+        self.repeat=None;self.arm_pending=False;self.session_reset_pending=False;self.session_reset_time=-1e30
+        if rospy.get_param('~repeat_test',False):
+            if not self.auto_start:raise ValueError('repeat test requires pilot OFFBOARD edge start')
+            with open(rospy.get_param('~repeat_config')) as stream:repeat_config=yaml.safe_load(stream)
+            with open(rospy.get_param('~geofence_config')) as stream:geofence=yaml.safe_load(stream)
+            self.repeat=RepeatTrial(repeat_config,geofence)
+            self.sync_status_path=Path(repeat_config['sync_status_file'])
+            self.sync_reason='not_checked'
         self.transition=bool(rospy.get_param('~estimation_transition',False))
         self.routed_topic=rospy.get_param('~routed_pose_topic','/landing/vision_pose_selected')
         self.router_status={}
@@ -57,6 +68,7 @@ class LandingTrial:
         if self.trial.finish_mode not in ('auto_land','force_disarm'):raise ValueError('invalid landing_finish_mode')
         self.cut_pending=False;self.cut_started=None;self.cut_result=None
         self.termination_service=rospy.ServiceProxy('/flight_safety_response/request_termination',Trigger)
+        self.termination_reset=rospy.ServiceProxy('/flight_safety_response/reset_external_termination',Trigger)
         self.speed=float(rospy.get_param('~approach_speed_mps',.5));self.kp=float(rospy.get_param('~approach_kp',.8))
         self.landing_speed=float(rospy.get_param('~landing_horizontal_speed_mps',.5))
         self.yaw_rate=float(rospy.get_param('~yaw_rate_limit_rad_s',.35))
@@ -84,9 +96,11 @@ class LandingTrial:
         self.mode_service=rospy.ServiceProxy('/mavros/set_mode',SetMode)
         self.controller_reset=rospy.ServiceProxy('/landing_trial_controller/reset',Trigger)
         self.param_service=rospy.ServiceProxy('/mavros/param/get',ParamGet)
+        self.arm_service=rospy.ServiceProxy('/mavros/cmd/arming',CommandBool)
         self.mux_service=rospy.ServiceProxy('/vision_pose_mux/select',MuxSelect)
         topics=[('mocap',self.mocap_topic,PoseStamped),('local','/mavros/local_position/pose',PoseStamped),
             ('state','/mavros/state',State),('extended','/mavros/extended_state',ExtendedState),
+            ('velocity','/mavros/local_position/velocity_local',TwistStamped),
             ('safety','/flight_safety/state',FlightState),('vision','/mavros/vision_pose/pose',PoseStamped),
             ('selected','/vision_pose_mux/selected',String),('pad','/landing/pad_pose_global',PoseStamped),
             ('aligned','/landing/alignment/ready',Bool),('visible','/landing/target_visible',Bool),
@@ -123,6 +137,55 @@ class LandingTrial:
                     self.entry_ready=bool(ok and state and state.mode!='OFFBOARD')
                     self.prepare_pending=False
         threading.Thread(target=prepare,daemon=True).start()
+
+    def sync_ready(self):
+        if self.repeat is None:return True
+        try:
+            status=json.loads(self.sync_status_path.read_text())
+            age=time.time()-float(status['checked_at'])
+            logs=self.sync_status_path.parent
+            sessions=sorted(p.stem for p in logs.glob('*.bag'))
+            expected=sessions[-1] if sessions else None
+            ready=(0<=age<=6. and status.get('ready') is True
+                   and status.get('latest_session')==expected
+                   and not any(logs.glob('*.active')) and not any(logs.glob('*.ready')))
+            self.sync_reason='verified' if ready else status.get('reason','stale_or_pending_transfer')
+            return ready
+        except (OSError,ValueError,KeyError,TypeError):
+            self.sync_reason='sync_status_unavailable';return False
+
+    def request_arm(self):
+        if self.dry or self.arm_pending:return
+        self.arm_pending=True;cycle=self.repeat.number
+        def call():
+            try:
+                with self.lock:
+                    now=time.monotonic();state=self.inputs.get('state');ext=self.inputs.get('extended')
+                    allowed=(self.repeat.number==cycle and self.trial.phase=='ARMING'
+                        and state and state.mode=='OFFBOARD' and not state.armed
+                        and self.fresh('extended',now,2.) and ext.landed_state==ExtendedState.LANDED_STATE_ON_GROUND
+                        and self.health(now) and self.sync_ready())
+                if allowed:
+                    result=self.arm_service(value=True)
+                    with self.lock:
+                        if self.repeat.number==cycle and self.trial.phase=='ARMING' and not result.success:
+                            self.repeat.phase='FAILED_HOLD';self.trial.fail('arm_rejected')
+            except rospy.ServiceException as error:
+                with self.lock:
+                    if self.repeat.number==cycle and self.trial.phase=='ARMING':
+                        self.repeat.phase='FAILED_HOLD';self.trial.fail('arm_service_failed')
+                rospy.logwarn('repeat arm failed: %s',error)
+            finally:self.arm_pending=False
+        threading.Thread(target=call,daemon=True).start()
+
+    def prepare_external_session(self,now):
+        if self.dry or self.session_reset_pending or now-self.session_reset_time<1.:return
+        self.session_reset_pending=True;self.session_reset_time=now
+        def call():
+            try:self.termination_reset()
+            except rospy.ServiceException:pass
+            finally:self.session_reset_pending=False
+        threading.Thread(target=call,daemon=True).start()
 
     def receive(self,m,key):
         with self.lock:
@@ -293,9 +356,12 @@ class LandingTrial:
             self.previous_now=ros_now
             if state is None:return
             healthy=self.health(now)
+            data_ready=self.sync_ready() if self.repeat else True
             if self.auto_start:
                 standby=state.mode not in ('OFFBOARD','AUTO.LAND') and self.trial.phase in ('IDLE','CANCELLED','COMPLETE')
-                if standby and healthy:
+                if self.repeat and standby and not state.armed and data_ready and not healthy:
+                    self.prepare_external_session(now)
+                if standby and healthy and data_ready:
                     if self.standby_since is None:self.standby_since=now
                     self.prepare_standby(now)
                 elif state.mode!='OFFBOARD':self.standby_since=None
@@ -303,9 +369,18 @@ class LandingTrial:
                 if entered and self.trial.phase not in ('AUTO_LAND','CUT_WAIT'):
                     ext=self.inputs.get('extended')
                     airborne=self.fresh('extended',now,2.) and ext.landed_state==ExtendedState.LANDED_STATE_IN_AIR
-                    allowed=healthy and state.armed and airborne and self.entry_ready and self.standby_since is not None and now-self.standby_since>=1.
+                    grounded=self.fresh('extended',now,2.) and ext.landed_state==ExtendedState.LANDED_STATE_ON_GROUND
+                    ready=healthy and self.entry_ready and self.standby_since is not None and now-self.standby_since>=1.
+                    allowed=ready and state.armed and airborne and self.repeat is None
                     self.entry_ready=False;self.standby_since=None;self.marker_cache=None
-                    if allowed and self.trial.prepare(now-1.):
+                    if self.repeat and ready and data_ready and grounded and not state.armed and self.fresh('velocity',now):
+                        try:
+                            self.repeat.begin(now,transform(self.inputs['mocap'])[:3,3])
+                            self.trial.phase='ARMING';self.trial.reason='pilot_requested_ground_repeat'
+                            self.entry_time=now;self.capture_hold();self.heading=yaw(self.hold)
+                            self.cut_result=None;self.request_arm()
+                        except ValueError as error:self.trial.fail(str(error))
+                    elif allowed and self.trial.prepare(now-1.):
                         self.entry_time=now;self.capture_hold()
                     else:
                         self.trial.fail('OFFBOARD_entry_not_ready');self.capture_hold()
@@ -321,7 +396,19 @@ class LandingTrial:
                 self.trial.fail('marker_source_lost_trial_failed');self.capture_hold()
             estimation_ready=not self.transition or (self.router_status.get('source')=='marker' and self.router_status.get('last_output_source')=='marker' and self.router_status.get('switch_check',{}).get('consistent',False) and self.fresh('routed',now) and healthy)
             previous=self.trial.phase
-            phase=self.trial.step(now,offboard=state.mode=='OFFBOARD',armed=state.armed,healthy=healthy,marker_good=good,marker_height=height,marker_time=marker_time,mocap_height=mocap_height,estimation_ready=estimation_ready,landed=landed,auto_land=state.mode=='AUTO.LAND')
+            if self.repeat and self.trial.phase in self.repeat.PHASES:
+                v=self.inputs.get('velocity');speed=math.sqrt(v.twist.linear.x**2+v.twist.linear.y**2+v.twist.linear.z**2) if v else float('inf')
+                phase,reason=self.repeat.step(now,armed=state.armed,
+                    airborne=self.fresh('extended',now,2.) and ext.landed_state==ExtendedState.LANDED_STATE_IN_AIR,
+                    offboard=state.mode=='OFFBOARD',healthy=healthy and self.fresh('velocity',now),
+                    position=transform(self.inputs['mocap'])[:3,3],speed=speed)
+                self.trial.phase=phase;self.trial.reason=reason or 'repeat_'+phase.lower()
+                if phase=='APPROACH':
+                    # Fresh marker dwell begins only after the random target has settled.
+                    self.entry_time=now;self.marker_cache=None
+                    self.trial.good_since=self.trial.last_good=None
+            else:
+                phase=self.trial.step(now,offboard=state.mode=='OFFBOARD',armed=state.armed,healthy=healthy,marker_good=good,marker_height=height,marker_time=marker_time,mocap_height=mocap_height,estimation_ready=estimation_ready,landed=landed,auto_land=state.mode=='AUTO.LAND')
             if previous!=phase:
                 self.capture_hold()
                 if phase=='APPROACH'and self.hold is not None:self.altitude=self.hold[2,3];self.heading=yaw(self.hold)
@@ -354,6 +441,22 @@ class LandingTrial:
             if self.auto_start and state.mode not in ('OFFBOARD','AUTO.LAND') and healthy:
                 self.capture_hold();sp=self.hold_setpoint(self.hold)
             if phase not in ('IDLE','CANCELLED','COMPLETE')and self.hold is not None and self.fresh('local',now):sp=self.hold_setpoint(self.hold)
+            if self.repeat and phase in self.repeat.PHASES and healthy and control_fresh:
+                L_B=transform(self.inputs['local']);G_B=transform(self.inputs['mocap'])
+                L_G=L_B[:3,:3]@G_B[:3,:3].T
+                goal=np.array(self.repeat.goal)
+                velocity=self.kp*(goal-G_B[:3,3])
+                velocity=np.array(limit_horizontal_velocity(velocity,self.repeat.speed))
+                velocity[2]=np.clip(velocity[2],-self.repeat.vertical_speed,self.repeat.vertical_speed)
+                velocity=L_G@velocity
+                velocity=np.array(limit_horizontal_velocity(velocity,self.repeat.speed))
+                velocity[2]=np.clip(velocity[2],-self.repeat.vertical_speed,self.repeat.vertical_speed)
+                if phase=='ARMING':velocity[:]=0.
+                sp=self.hold_setpoint(L_B)
+                sp.type_mask=PositionTarget.IGNORE_AFX|PositionTarget.IGNORE_AFY|PositionTarget.IGNORE_AFZ|PositionTarget.IGNORE_YAW
+                sp.velocity.x,sp.velocity.y,sp.velocity.z=velocity
+                sp.yaw_rate=float(np.clip(math.atan2(math.sin(self.heading-yaw(L_B)),math.cos(self.heading-yaw(L_B))),-self.yaw_rate,self.yaw_rate))
+                self.capture_hold()
             if phase in ('APPROACH','DESCEND')and healthy and control_fresh:
                 L_B=transform(self.inputs['local']);G_B=transform(self.inputs[control_key]);L_G=L_B[:3,:3]@G_B[:3,:3].T
                 velocity=None;rate=0.
@@ -382,11 +485,13 @@ class LandingTrial:
             if sp is not None:
                 sp.header.stamp=rospy.Time.now();self.pub.publish(sp)
                 if self.live is not None:self.live.publish(sp)
-            mission_state={'FAILED_HOLD':'hold_failed','AUTO_LAND':'landing','COMPLETE':'complete','CUT_WAIT':'terminating'}.get(self.trial.phase,'active'if self.trial.phase in ('APPROACH','DESCEND')else 'idle')
+            mission_state={'FAILED_HOLD':'hold_failed','AUTO_LAND':'landing','COMPLETE':'complete','CUT_WAIT':'terminating'}.get(self.trial.phase,'active'if self.trial.phase in ('ARMING','TAKEOFF','CENTER','RANDOM_POSITION','APPROACH','DESCEND')else 'idle')
             self.mission_pub.publish(json.dumps(dict(state=mission_state,dry_run=self.dry,source='landing_trial')))
             self.status.publish(json.dumps(dict(phase=self.trial.phase,reason=self.trial.reason,dry_run=self.dry,
-                estimation_source=self.router_status.get('source','unknown') if self.transition else 'optitrack',estimation_transition=self.transition,landing_finish_mode=self.trial.finish_mode,mocap_camera_height_m=mocap_height,force_disarm_ack=self.cut_result,offboard_entry_ready=bool(self.entry_ready and healthy and self.standby_since is not None and now-self.standby_since>=1.),healthy=bool(healthy),marker_qualified=bool(good),marker_height_m=height,
+                estimation_source=self.router_status.get('source','unknown') if self.transition else 'optitrack',estimation_transition=self.transition,landing_finish_mode=self.trial.finish_mode,mocap_camera_height_m=mocap_height,force_disarm_ack=self.cut_result,offboard_entry_ready=bool(self.entry_ready and healthy and data_ready and self.standby_since is not None and now-self.standby_since>=1.),healthy=bool(healthy),marker_qualified=bool(good),marker_height_m=height,
                 marker_confirm_s=self.trial.marker_confirm_s,marker_loss_s=self.trial.marker_loss_s,
+                repeat_test=self.repeat.status() if self.repeat else None,data_sync_ready=data_ready,
+                data_sync_reason=self.sync_reason if self.repeat else 'not_required',
                 pad_alignment_ready=self.aligned,command_frame='MAVROS local ENU',live_output=self.normal_topic if self.live else None)))
 
 
