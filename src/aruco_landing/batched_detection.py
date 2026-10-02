@@ -28,7 +28,7 @@ class BatchedPadDetector:
             # Isaac camera is RGB(A). Compute one grayscale channel on-device;
             # transfer a single batch, rather than N ROS messages/RPC images.
             gray = ((rgb[...,:3].to(torch.int32) *
-                     torch.tensor([77,150,29], device=rgb.device)).sum(-1) >> 8).to(torch.uint8)
+                     torch.tensor([77,150,29], device=rgb.device,dtype=torch.int32)).sum(-1,dtype=torch.int32) >> 8).to(torch.uint8)
             images = gray.cpu().numpy()
             transferred = images.nbytes
             transfer_end = time.perf_counter()
