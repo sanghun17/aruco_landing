@@ -6,6 +6,7 @@ import threading
 
 import rospy
 from aruco_landing.yaw_control import yaw_feedback
+from aruco_landing.landing_math import filtered_derivative, horizontal_feedback
 from geometry_msgs.msg import PoseWithCovarianceStamped, TwistStamped
 from std_msgs.msg import Bool, Float64, String
 from std_srvs.srv import SetBool, SetBoolResponse, Trigger, TriggerResponse
@@ -161,28 +162,10 @@ class LandingController:
         position = message.pose.pose.position
         error = (-position.x, -position.y)
         stamp = message.header.stamp.to_sec()
-        if (self.previous_error is not None and self.previous_pose_stamp is not None
-                and stamp > self.previous_pose_stamp):
-            dt = stamp - self.previous_pose_stamp
-            if dt <= 0.25:
-                raw_x = (error[0] - self.previous_error[0]) / dt
-                raw_y = (error[1] - self.previous_error[1]) / dt
-                alpha = (
-                    1.0 if self.derivative_filter_tau == 0.0
-                    else dt / (self.derivative_filter_tau + dt)
-                )
-                filtered_x = (
-                    (1.0 - alpha) * self.error_derivative[0] + alpha * raw_x
-                )
-                filtered_y = (
-                    (1.0 - alpha) * self.error_derivative[1] + alpha * raw_y
-                )
-                derivative_speed = math.hypot(filtered_x, filtered_y)
-                if derivative_speed > self.derivative_speed_limit:
-                    scale = self.derivative_speed_limit / derivative_speed
-                    filtered_x *= scale
-                    filtered_y *= scale
-                self.error_derivative = (filtered_x, filtered_y)
+        dt = 0.0 if self.previous_pose_stamp is None else stamp-self.previous_pose_stamp
+        self.error_derivative = filtered_derivative(
+            error, self.previous_error, self.error_derivative, dt,
+            self.derivative_filter_tau, self.derivative_speed_limit)
         self.previous_error = error
         self.previous_pose_stamp = stamp
         self.pose = message
@@ -260,19 +243,12 @@ class LandingController:
 
             if state == self.DESCENDING and pose is not None and visible:
                 position = pose.pose.pose.position
-                error_x, error_y = -position.x, -position.y
+                pose_age = 0.0
                 if self.latency_compensation_enabled and pose_stamp is not None:
-                    pose_age = max(0.0, min(now_sec - pose_stamp,
-                                            self.max_pose_prediction))
-                    error_x += derivative[0] * pose_age
-                    error_y += derivative[1] * pose_age
-                vx = self.kp * error_x + self.kd * derivative[0]
-                vy = self.kp * error_y + self.kd * derivative[1]
-                speed = math.hypot(vx, vy)
-                if speed > self.speed_limit:
-                    scale = self.speed_limit / speed
-                    vx *= scale
-                    vy *= scale
+                    pose_age = max(0.0, min(now_sec-pose_stamp, self.max_pose_prediction))
+                vx, vy = horizontal_feedback(
+                    (position.x, position.y), derivative, pose_age,
+                    self.kp, self.kd, self.speed_limit)
                 command.twist.linear.x = vx
                 command.twist.linear.y = vy
                 height_pose = (

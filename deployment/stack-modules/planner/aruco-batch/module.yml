@@ -1,0 +1,7 @@
+name: aruco-batch
+group: planner
+description: ROS-free ArUco landing policy and pose estimation for Isaac batch evaluation.
+needs: [simulation/isaac-lab]
+runtime_service: isaac
+run: [run.sh]
+provides: [batch-landing-policy]
