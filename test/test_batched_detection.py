@@ -2,6 +2,7 @@ import unittest
 import cv2
 import numpy as np
 import torch
+from unittest import mock
 from aruco_landing.batched_detection import BatchedPadDetector
 from aruco_landing.physical_pad import PhysicalPadDetector
 
@@ -15,12 +16,21 @@ class BatchedDetectionTest(unittest.TestCase):
         image[276:444,276:444]=cv2.aruco.generateImageMarker(dictionary,7,168)
         expected=PhysicalPadDetector(manifest).detect(image,K,np.zeros(5))[0]
         rgb=torch.from_numpy(np.repeat(image[None,...,None],3,axis=-1))
-        actual,statistics=BatchedPadDetector(manifest,1,K).detect(rgb)
+        batch=BatchedPadDetector(manifest,1,K)
+        actual,statistics=batch.detect(rgb)
         self.assertIsNotNone(expected)
         self.assertIsNotNone(actual[0])
         np.testing.assert_allclose(actual[0]['camera_from_pad'],expected['camera_from_pad'],atol=1e-10)
         self.assertEqual(statistics['transferred_bytes'],720*720)
         self.assertEqual(statistics['markers'],1)
+        self.assertEqual(batch.last_detected_ids, [[7]])
+        # Detection availability remains measurable when PnP rejects a frame.
+        with mock.patch.object(batch.detectors[0], 'estimate', return_value=None):
+            rejected,_=batch.detect(rgb)
+        self.assertEqual(rejected, [None])
+        self.assertEqual(batch.last_detected_ids, [[7]])
+        batch.detect(torch.full_like(rgb,255))
+        self.assertEqual(batch.last_detected_ids, [[]])
 
 
 if __name__=='__main__': unittest.main()

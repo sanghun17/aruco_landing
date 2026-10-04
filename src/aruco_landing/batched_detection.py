@@ -11,6 +11,8 @@ class BatchedPadDetector:
         self.K, self.D = np.asarray(K, np.float64), np.zeros(5)
         self.backend = backend
         self.gpu = None
+        # Includes decoded markers even when pose estimation subsequently fails.
+        self.last_detected_ids = [[] for _ in range(num_envs)]
         if backend == 'gpu-experimental':
             from aruco_landing.gpu_aruco import GpuArucoDetector
             self.gpu = GpuArucoDetector(self.detectors[0].dictionary)
@@ -37,6 +39,7 @@ class BatchedPadDetector:
                 corners, ids, _ = detector.detector.detectMarkers(image)
                 corners_ids.append((corners, [] if ids is None else ids.flatten().tolist()))
         detection_end = time.perf_counter()
+        self.last_detected_ids = [list(ids) for _, ids in corners_ids]
         results = []
         for detector, (corners, ids) in zip(self.detectors, corners_ids):
             try:
