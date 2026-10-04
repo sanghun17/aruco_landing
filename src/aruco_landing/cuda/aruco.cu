@@ -1,4 +1,4 @@
-// Experimental CUDA ArUco 4x4 detector; no host image/contour processing.
+// Experimental CUDA ArUco 4x4/6x6 detector; no host image/contour processing.
 // C ABI intentionally avoids a dependency on a particular PyTorch C++ ABI.
 #include <cuda_runtime.h>
 #include <cmath>
@@ -45,7 +45,10 @@ __device__ float sample(const unsigned char* im,int w,int h,float x,float y) {
   int ix=(int)x,iy=(int)y; float u=x-ix,v=y-iy;
   return (1-u)*(1-v)*im[iy*w+ix]+u*(1-v)*im[iy*w+ix+1]+(1-u)*v*im[(iy+1)*w+ix]+u*v*im[(iy+1)*w+ix+1];
 }
-__global__ void decode(Workspace a,const int* codes,int code_count,float* out,int* count) {
+__device__ int hamming(int bits,int code) { return __popc(bits^code); }
+__device__ int hamming(unsigned long long bits,unsigned long long code) { return __popcll(bits^code); }
+template<int MarkerSize, typename Code>
+__global__ void decode(Workspace a,const Code* codes,int code_count,float* out,int* count) {
   int slot=blockIdx.x,env=slot/a.cap; if(threadIdx.x||slot%a.cap>=a.candidate_count[env]||a.candidate_count[env]>a.cap)return;
   int r=a.candidates[slot],*s=a.stats+r*5,base=env*a.w*a.h;
   float qx[4],qy[4];int bestmin=INT_MAX,bestmax=-1;
@@ -95,19 +98,20 @@ __global__ void decode(Workspace a,const int* codes,int code_count,float* out,in
   float g=(dx3*dy2-dx2*dy3)/den,h=(dx1*dy3-dx3*dy1)/den;
   float A=qx[1]-qx[0]+g*qx[1],B=qx[3]-qx[0]+h*qx[3];
   float C=qy[1]-qy[0]+g*qy[1],D=qy[3]-qy[0]+h*qy[3];
-  int bits=0;
-  for(int row=0;row<6;row++)for(int col=0;col<6;col++) {
+  constexpr int cells=MarkerSize+2;
+  Code bits=0;
+  for(int row=0;row<cells;row++)for(int col=0;col<cells;col++) {
     float mean=0;
     for(int sy=-1;sy<=1;sy++)for(int sx=-1;sx<=1;sx++) {
-      float u=(col+.5f+sx*.2f)/6,v=(row+.5f+sy*.2f)/6,z=g*u+h*v+1;
+      float u=(col+.5f+sx*.2f)/cells,v=(row+.5f+sy*.2f)/cells,z=g*u+h*v+1;
       mean+=sample(a.gray+base,a.w,a.h,(A*u+B*v+qx[0])/z,(C*u+D*v+qy[0])/z);
     }
     bool white=mean>127*9;
-    if(row==0||row==5||col==0||col==5){if(white)return;}
-    else if(white)bits|=1<<((row-1)*4+col-1);
+    if(row==0||row==cells-1||col==0||col==cells-1){if(white)return;}
+    else if(white)bits|=Code(1)<<((row-1)*MarkerSize+col-1);
   }
   int winner=-1,distance=2,ties=0;
-  for(int k=0;k<code_count;k++) {int d=__popc(bits^codes[k]);
+  for(int k=0;k<code_count;k++) {int d=hamming(bits,codes[k]);
     if(d<distance){distance=d;winner=k;ties=1;}else if(d==distance)ties++;}
   if(winner<0||ties!=1)return;
   int index=atomicAdd(count+env,1);if(index>=a.cap)return;
@@ -132,8 +136,18 @@ extern "C" int aruco_detect(Workspace* a,const unsigned char* rgb,float* output,
   int blocks=(a->pixels+255)/256;
   init<<<blocks,256,0,stream>>>(*a,rgb,channels);unite<<<blocks,256,0,stream>>>(*a);
   stats<<<blocks,256,0,stream>>>(*a);candidates<<<blocks,256,0,stream>>>(*a);
-  decode<<<a->n*a->cap,1,0,stream>>>(*a,codes,400,output,count);
+  decode<4,int><<<a->n*a->cap,1,0,stream>>>(*a,codes,400,output,count);
   overflow<<<(a->n+63)/64,64,0,stream>>>(*a,count);
   // Overflow must be visible to the caller, never silently truncate markers.
+  return cudaGetLastError();
+}
+// Separate entry point preserves the original 4x4 ABI and its int32 code table.
+extern "C" int aruco_detect6(Workspace* a,const unsigned char* rgb,float* output,int* count,const unsigned long long* codes,int channels,cudaStream_t stream) {
+  cudaMemsetAsync(count,0,a->n*sizeof(int),stream);cudaMemsetAsync(a->candidate_count,0,a->n*sizeof(int),stream);
+  int blocks=(a->pixels+255)/256;
+  init<<<blocks,256,0,stream>>>(*a,rgb,channels);unite<<<blocks,256,0,stream>>>(*a);
+  stats<<<blocks,256,0,stream>>>(*a);candidates<<<blocks,256,0,stream>>>(*a);
+  decode<6,unsigned long long><<<a->n*a->cap,1,0,stream>>>(*a,codes,200,output,count);
+  overflow<<<(a->n+63)/64,64,0,stream>>>(*a,count);
   return cudaGetLastError();
 }

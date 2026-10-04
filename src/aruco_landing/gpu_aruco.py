@@ -1,4 +1,4 @@
-"""Experimental full-device 4x4 ArUco detector for the controlled Isaac scene.
+"""Experimental full-device 4x4/6x6 ArUco detector for the controlled Isaac scene.
 
 Thresholding, connected components, quad/edge fitting and dictionary decoding
 run in CUDA. Only counts, IDs and four corners cross to CPU. This is NOT an
@@ -31,8 +31,9 @@ def build_library(output, nvcc=None):
 class GpuArucoDetector:
     def __init__(self, dictionary, library=None, capacity=256):
         import torch
-        if dictionary.markerSize != 4 or len(dictionary.bytesList) != 100:
-            raise ValueError('experimental CUDA backend supports DICT_4X4_100 only')
+        shape = (dictionary.markerSize, len(dictionary.bytesList))
+        if shape not in ((4,100),(6,50)):
+            raise ValueError('experimental CUDA backend supports DICT_4X4_100 and DICT_6X6_50')
         path = library or os.environ.get('ARUCO_CUDA_LIBRARY')
         if not path or not Path(path).is_file():
             raise RuntimeError('set ARUCO_CUDA_LIBRARY to a compiled CUDA detector library')
@@ -40,15 +41,16 @@ class GpuArucoDetector:
         self.lib.aruco_create.restype = ctypes.c_void_p
         self.lib.aruco_create.argtypes = [ctypes.c_int]*4
         self.lib.aruco_destroy.argtypes = [ctypes.c_void_p]
-        self.lib.aruco_detect.argtypes = [ctypes.c_void_p]*5+[ctypes.c_int,ctypes.c_void_p]
-        self.lib.aruco_detect.restype = ctypes.c_int
+        self.detect_function = self.lib.aruco_detect if shape[0] == 4 else self.lib.aruco_detect6
+        self.detect_function.argtypes = [ctypes.c_void_p]*5+[ctypes.c_int,ctypes.c_void_p]
+        self.detect_function.restype = ctypes.c_int
         codes = []
         for marker_id in range(len(dictionary.bytesList)):
-            bits = cv2.aruco.generateImageMarker(dictionary,marker_id,6)[1:5,1:5] > 0
+            bits = cv2.aruco.generateImageMarker(dictionary,marker_id,shape[0]+2)[1:-1,1:-1] > 0
             for rotation in range(4):
                 code = sum(int(b)<<i for i,b in enumerate(np.rot90(bits,rotation).flat))
                 codes.append(code)
-        self.codes = torch.tensor(codes,dtype=torch.int32,device='cuda')
+        self.codes = torch.tensor(codes,dtype=torch.int32 if shape[0] == 4 else torch.int64,device='cuda')
         self.capacity = capacity
         self.handle = None
         self.shape = None
@@ -73,7 +75,7 @@ class GpuArucoDetector:
         rows = torch.empty((n,self.capacity,9),dtype=torch.float32,device=rgb.device)
         counts = torch.empty(n,dtype=torch.int32,device=rgb.device)
         stream = torch.cuda.current_stream(rgb.device).cuda_stream
-        error = self.lib.aruco_detect(self.handle,rgb.data_ptr(),rows.data_ptr(),counts.data_ptr(),
+        error = self.detect_function(self.handle,rgb.data_ptr(),rows.data_ptr(),counts.data_ptr(),
                                      self.codes.data_ptr(),c,stream)
         if error: raise RuntimeError('CUDA detector launch failed: '+str(error))
         host_counts = counts.cpu().numpy()
