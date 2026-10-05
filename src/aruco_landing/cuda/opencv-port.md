@@ -37,13 +37,19 @@ varying scale/rotation/lighting. Benchmarks exclude rendering and compare to
 eight CPU workers including grayscale download. Switching evaluation defaults
 requires native-runtime equivalence and throughput evidence.
 
-Pinned upstream algorithms: OpenCV 4.13.0. CPU runtime 4.14 must be separately
-qualified; newer OpenCV implementations may change semantics. See the shipped
+Pinned contour/grouping algorithms: OpenCV 4.13.0. For runtimes exposing
+`validBitIdThreshold` (introduced in 4.14), decoding retains float32 cell-pixel
+ratios, the runtime border threshold and the dictionary's ratio overload.
+Earlier runtimes retain binary strict-majority decoding. A landing-frame audit
+on IM found that applying 4.13 decoding to its 4.14 runtime produced additional
+IDs; static reset images had missed that difference. Runtime compatibility must
+be qualified again after any library upgrade. See the shipped
 `opencv-LICENSE` and the retained approximation source notice below.
 
 ## Upstream source hashes
 
 - [aruco_detector.cpp](https://github.com/opencv/opencv/blob/4.13.0/modules/objdetect/src/aruco/aruco_detector.cpp): SHA-256 `d0aa18045c4dfb4e4acf60a4d9a812b261dfa537c372db262556addac91b8b34`
+- [4.14 ratio decoder, aruco_detector.cpp](https://github.com/opencv/opencv/blob/4.14.0/modules/objdetect/src/aruco/aruco_detector.cpp): SHA-256 `329ac3f0fd90939a23e1cbf21096352e2229a01998bd08d70ca50e17b99f11ed`
 - [contours_new.cpp](https://github.com/opencv/opencv/blob/4.13.0/modules/imgproc/src/contours_new.cpp): SHA-256 `52627e190b93d15e7d0e9ca312e7e3350901e302fe5769a914260b9024919284`
 - [contours_common.hpp](https://github.com/opencv/opencv/blob/4.13.0/modules/imgproc/src/contours_common.hpp): SHA-256 `4863a1686b476ef1aac04bf0b8c580ccd15c17594f2b68f3c93aa2f63884bac3`
 - [approx.cpp](https://github.com/opencv/opencv/blob/4.13.0/modules/imgproc/src/approx.cpp): SHA-256 `d2b9fa2419c9eb6f880676e862d5b5fb38cd250b2db26da3638efc64181d4bcb`

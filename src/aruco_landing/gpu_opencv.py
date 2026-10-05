@@ -128,7 +128,7 @@ class GpuOpenCVDetector:
         interior = patch[cut:patch.shape[0]-cut,cut:patch.shape[1]-cut] if cut else patch
         mean, std = cv2.meanStdDev(interior)
         if std[0,0] < p.minOtsuStdDev:
-            bits = np.full((cells,cells), int(mean[0,0]>127),np.uint8)
+            ratios = np.full((cells,cells), int(mean[0,0]>127),np.float32)
         else:
             _, threshold = cv2.threshold(patch,125,255,cv2.THRESH_BINARY|cv2.THRESH_OTSU)
             margin = int(p.perspectiveRemoveIgnoredMarginPerCell*cell)
@@ -137,16 +137,32 @@ class GpuOpenCVDetector:
             squares = threshold.reshape(cells,cell,cells,cell).transpose(0,2,1,3)
             if margin:
                 squares = squares[:,:,margin:cell-margin,margin:cell-margin]
-            bits = (np.count_nonzero(squares,axis=(2,3)) > squares.shape[2]*squares.shape[3]//2).astype(np.uint8)
-        border_mask = np.ones_like(bits,bool)
+            ratios = np.count_nonzero(squares,axis=(2,3)).astype(np.float32)
+            ratios /= np.float32(squares.shape[2]*squares.shape[3])
+        # 4.14 changed the reference detector to ratio-based decoding. In
+        # particular 50/50 cells are ambiguous rather than binary black bits.
+        # Use the runtime's own dictionary overload and border threshold;
+        # converting ratios to binary here would silently preserve 4.13 rules.
+        ratio_decoder = hasattr(p, 'validBitIdThreshold')
+        threshold = np.float32(p.validBitIdThreshold) if ratio_decoder else np.float32(.5)
+        if not ratio_decoder:
+            ratios = (ratios > np.float32(.5)).astype(np.float32)
+        border_mask = np.ones_like(ratios,bool)
         border_mask[border:-border,border:-border] = False
-        errors = int(bits[border_mask].sum())
-        if p.detectInvertedMarker and int((1-bits)[border_mask].sum()) < errors:
-            bits = 1-bits
-            errors = int(bits[border_mask].sum())
+        errors = int(np.count_nonzero(ratios[border_mask] > threshold))
+        inverted_errors = int(np.count_nonzero(ratios[border_mask] < np.float32(1)-threshold)) if ratio_decoder else int(np.count_nonzero(ratios[border_mask] <= threshold))
+        if p.detectInvertedMarker and inverted_errors < errors:
+            ratios = np.float32(1)-ratios
+            errors = inverted_errors
         if errors > int(self.dictionary.markerSize**2*p.maxErroneousBitsInBorderRate):
             return None
-        okay, mid, rotation = self.dictionary.identify(np.ascontiguousarray(bits[border:-border,border:-border]),p.errorCorrectionRate)
+        inner = np.ascontiguousarray(ratios[border:-border,border:-border])
+        if ratio_decoder:
+            okay, mid, rotation = self.dictionary.identify(inner,p.errorCorrectionRate,p.validBitIdThreshold)
+        else:
+            # Before 4.14 the detector assigned white only for a strict majority.
+            bits = (inner > np.float32(.5)).astype(np.uint8)
+            okay, mid, rotation = self.dictionary.identify(bits,p.errorCorrectionRate)
         return (mid,rotation) if okay else None
 
     def _chunk(self, gray):
