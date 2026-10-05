@@ -92,6 +92,15 @@ four times the small-marker side length.
 
 The core estimator/controller remains independent of AirSim and MAVROS APIs.
 
+The optional `gpu-opencv-compat` batch frontend follows classic OpenCV ArUco
+candidate extraction rather than the fixed-threshold experimental detector.
+Full image processing stays on CUDA; compact candidate grouping, dictionary
+verification and OpenCV subpixel refinement remain on CPU. Build its library
+with `aruco_landing.gpu_opencv.build_library`, select it through
+`ARUCO_OPENCV_CUDA_LIBRARY`, and run `scripts/qualify_gpu_opencv.py` against
+the intended OpenCV runtime before use. Algorithm scope, source provenance,
+license and limitations are in [opencv-port.md](src/aruco_landing/cuda/opencv-port.md).
+
 ## OptiTrack-to-marker vision-pose adapter
 
 `landing_vision_pose_adapter.launch` leaves MAVROS and PX4 unchanged. It is the

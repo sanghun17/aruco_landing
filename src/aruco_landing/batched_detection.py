@@ -18,6 +18,9 @@ class BatchedPadDetector:
         if backend == 'gpu-experimental':
             from aruco_landing.gpu_aruco import GpuArucoDetector
             self.gpu = GpuArucoDetector(self.detectors[0].dictionary)
+        elif backend == 'gpu-opencv-compat':
+            from aruco_landing.gpu_opencv import GpuOpenCVDetector
+            self.gpu = GpuOpenCVDetector(self.detectors[0].dictionary, self.detectors[0].params)
         elif backend == 'cpu-nested-apriltag':
             from concurrent.futures import ThreadPoolExecutor
             from aruco_landing.nested_apriltag import NestedAprilTagTracker

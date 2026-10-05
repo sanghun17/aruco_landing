@@ -6,5 +6,5 @@ setup(
     version="0.1.0",
     packages=find_packages("src"),
     package_dir={"": "src"},
-    package_data={"aruco_landing": ["cuda/*.cu"]},
+    package_data={"aruco_landing": ["cuda/*.cu", "cuda/opencv-LICENSE", "cuda/opencv-port.md"]},
 )
