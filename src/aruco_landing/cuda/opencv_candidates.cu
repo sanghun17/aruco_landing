@@ -215,8 +215,12 @@ __global__ void warp_kernel(const unsigned char* gray,int h,int w,const double* 
                            const int* envs,unsigned char* out,int size,int count) {
     int i=blockIdx.x*blockDim.x+threadIdx.x;if(i>=count*size*size)return;
     int q=i/(size*size),x=i%size,y=(i/size)%size;const double* m=matrices+q*9;
-    double den=m[6]*x+m[7]*y+m[8],scale=den?1./den:0;
-    int sx=__double2int_rn((m[0]*x+m[1]*y+m[2])*scale),sy=__double2int_rn((m[3]*x+m[4]*y+m[5])*scale);
+    // OpenCV computes a block-row base before adding the horizontal offset.
+    // Reassociating these sums changes nearest-neighbor choices at half pixels.
+    int bw=min(1024/min(16,size),size),bx=(x/bw)*bw,lx=x-bx;
+    double den=(m[6]*bx+m[7]*y+m[8])+m[6]*lx,scale=den?1./den:0;
+    double sx0=m[0]*bx+m[1]*y+m[2],sy0=m[3]*bx+m[4]*y+m[5];
+    int sx=__double2int_rn((sx0+m[0]*lx)*scale),sy=__double2int_rn((sy0+m[3]*lx)*scale);
     out[i]=(sx>=0&&sy>=0&&sx<w&&sy<h)?gray[(envs[q]*h+sy)*w+sx]:0;
 }
 extern "C" int ocv_warp(const unsigned char* gray,int h,int w,const double* matrices,const int* envs,

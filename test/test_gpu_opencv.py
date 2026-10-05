@@ -8,6 +8,31 @@ pytestmark=pytest.mark.skipif(not os.environ.get('ARUCO_OPENCV_CUDA_LIBRARY'),
                             reason='requires explicitly built CUDA compatibility library')
 
 
+def test_candidate_warp_matches_reference_at_half_pixel_boundary():
+    import torch
+    from aruco_landing.gpu_opencv import GpuOpenCVDetector
+    from aruco_landing.physical_pad import PhysicalPadDetector
+    estimator=PhysicalPadDetector({'dictionary':'DICT_4X4_100','markers':[]})
+    detector=GpuOpenCVDetector(estimator.dictionary,estimator.params)
+    image=np.random.default_rng(1701).integers(0,256,(720,720),dtype=np.uint8)
+    # Landing-frame regression: row 11, column 16 maps to y=326.5. Different
+    # addition orders selected neighboring pixels and changed marker decoding.
+    quad=np.float32([[483,318],[499,319],[499,335],[483,335]])
+    canonical=np.float32([[0,0],[23,0],[23,23],[0,23]])
+    homography=cv2.getPerspectiveTransform(quad,canonical)
+    gray=torch.from_numpy(image[None]).cuda()
+    matrix=torch.from_numpy(cv2.invert(homography)[1][None]).cuda()
+    environment=torch.zeros(1,dtype=torch.int32,device=gray.device)
+    patch=torch.empty((1,24,24),dtype=torch.uint8,device=gray.device)
+    try:
+        detector._call('ocv_warp',gray.data_ptr(),720,720,matrix.data_ptr(),
+                       environment.data_ptr(),patch.data_ptr(),24,1)
+        reference=cv2.warpPerspective(image,homography,(24,24),flags=cv2.INTER_NEAREST)
+        np.testing.assert_array_equal(patch.cpu().numpy()[0],reference)
+    finally:
+        detector.close()
+
+
 def test_adaptive_threshold_pixels_match_reference_at_all_configured_scales():
     import torch
     import torch.nn.functional as F
