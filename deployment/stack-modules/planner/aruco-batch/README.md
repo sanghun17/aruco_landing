@@ -29,3 +29,10 @@ AprilTag uses another entry point with an explicit dictionary table length;
 rebuild for that dictionary. Nested patterns can change border connectivity
 and require separate rendered-image qualification; synthetic ID decoding alone
 does not validate a nested pad.
+
+For the original nested AprilTag figure, `cpu-nested-apriltag` acquires an
+OpenCV dictionary pose and tracks child patterns using optical ROI rectification,
+ECC affine alignment and decoded-ID verification. It transfers grayscale images
+and uses up to eight CPU workers. Tracker state resets between trials; no GT is
+an input. PnP and landing control remain shared. This compatible frontend is not
+the published MVFAN detector and must be identified separately in comparisons.
