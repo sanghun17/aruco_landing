@@ -8,6 +8,32 @@ from aruco_landing.physical_pad import PhysicalPadDetector
 
 
 class BatchedDetectionTest(unittest.TestCase):
+    def test_parallel_cpu_keeps_environment_order_and_reference_outputs(self):
+        manifest=dict(dictionary='DICT_4X4_100',markers=[dict(id=7,side_m=.12,yaw_deg=0.,center_m=dict(x=0.,y=0.))])
+        K=np.array([[700.,0.,360.],[0.,700.,360.],[0.,0.,1.]])
+        dictionary=cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_100)
+        images=[]
+        for index in range(8):
+            image=np.full((720,720),255,np.uint8)
+            if index % 3:
+                x=220+index*10
+                image[276:444,x:x+168]=cv2.aruco.generateImageMarker(dictionary,7,168)
+            images.append(image)
+        expected=[PhysicalPadDetector(manifest).detect(image,K,np.zeros(5)) for image in images]
+        batch=BatchedPadDetector(manifest,len(images),K)
+        try:
+            rgb=torch.from_numpy(np.repeat(np.stack(images)[...,None],3,axis=-1))
+            actual,statistics=batch.detect(rgb)
+            self.assertEqual(batch.last_detected_ids,[item[2] for item in expected])
+            self.assertEqual(statistics['transferred_bytes'],8*720*720)
+            for observation,reference in zip(actual,expected):
+                if reference[0] is None:
+                    self.assertIsNone(observation)
+                else:
+                    np.testing.assert_array_equal(observation['camera_from_pad'],reference[0]['camera_from_pad'])
+        finally:
+            batch.executor.shutdown()
+
     def test_grayscale_batch_preserves_reference_pose_and_accounts_transfer(self):
         manifest=dict(dictionary='DICT_4X4_100',markers=[dict(id=7,side_m=.12,yaw_deg=0.,center_m=dict(x=0.,y=0.))])
         K=np.array([[700.,0.,360.],[0.,700.,360.],[0.,0.,1.]])

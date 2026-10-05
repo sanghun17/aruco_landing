@@ -31,7 +31,10 @@ class BatchedPadDetector:
                 raise ValueError('nested tracker requires one parent and declared children')
             self.nested = [NestedAprilTagTracker(detector,parents[0]['render_cutouts_ids']) for detector in self.detectors]
             self.executor = ThreadPoolExecutor(max_workers=min(8,num_envs))
-        elif backend != 'cpu':
+        elif backend == 'cpu':
+            from concurrent.futures import ThreadPoolExecutor
+            self.executor = ThreadPoolExecutor(max_workers=min(8,num_envs))
+        else:
             raise ValueError('unknown detector backend: '+backend)
         cv2.setNumThreads(1)
 
@@ -42,6 +45,12 @@ class BatchedPadDetector:
     def _nested_detect(self, pair):
         tracker,image = pair
         return tracker.detect(image,self.K,self.D)
+
+    @staticmethod
+    def _cpu_detect(pair):
+        detector, image = pair
+        corners, ids, _ = detector.detector.detectMarkers(image)
+        return corners, [] if ids is None else ids.flatten().tolist()
 
     def detect(self, rgb):
         import torch
@@ -60,10 +69,9 @@ class BatchedPadDetector:
             if self.nested:
                 corners_ids = list(self.executor.map(self._nested_detect,zip(self.nested,images)))
             else:
-                corners_ids = []
-                for detector, image in zip(self.detectors, images):
-                    corners, ids, _ = detector.detector.detectMarkers(image)
-                    corners_ids.append((corners, [] if ids is None else ids.flatten().tolist()))
+                # Each environment owns an independent OpenCV detector. Ordered
+                # map keeps observations aligned with their simulation slots.
+                corners_ids = list(self.executor.map(self._cpu_detect,zip(self.detectors,images)))
         detection_end = time.perf_counter()
         self.last_detected_ids = [list(ids) for _, ids in corners_ids]
         results = []
