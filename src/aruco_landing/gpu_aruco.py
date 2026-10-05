@@ -32,8 +32,8 @@ class GpuArucoDetector:
     def __init__(self, dictionary, library=None, capacity=256):
         import torch
         shape = (dictionary.markerSize, len(dictionary.bytesList))
-        if shape not in ((4,100),(6,50)):
-            raise ValueError('experimental CUDA backend supports DICT_4X4_100 and DICT_6X6_50')
+        if shape not in ((4,100),(6,50),(6,587)):
+            raise ValueError('experimental CUDA backend supports DICT_4X4_100, DICT_6X6_50 and DICT_APRILTAG_36h11')
         path = library or os.environ.get('ARUCO_CUDA_LIBRARY')
         if not path or not Path(path).is_file():
             raise RuntimeError('set ARUCO_CUDA_LIBRARY to a compiled CUDA detector library')
@@ -41,8 +41,10 @@ class GpuArucoDetector:
         self.lib.aruco_create.restype = ctypes.c_void_p
         self.lib.aruco_create.argtypes = [ctypes.c_int]*4
         self.lib.aruco_destroy.argtypes = [ctypes.c_void_p]
-        self.detect_function = self.lib.aruco_detect if shape[0] == 4 else self.lib.aruco_detect6
-        self.detect_function.argtypes = [ctypes.c_void_p]*5+[ctypes.c_int,ctypes.c_void_p]
+        self.dynamic_code_count = shape == (6,587)
+        self.detect_function = (self.lib.aruco_detect6_dictionary if self.dynamic_code_count
+                                else self.lib.aruco_detect if shape[0] == 4 else self.lib.aruco_detect6)
+        self.detect_function.argtypes = [ctypes.c_void_p]*5 + ([ctypes.c_int] if self.dynamic_code_count else []) + [ctypes.c_int,ctypes.c_void_p]
         self.detect_function.restype = ctypes.c_int
         codes = []
         for marker_id in range(len(dictionary.bytesList)):
@@ -75,8 +77,10 @@ class GpuArucoDetector:
         rows = torch.empty((n,self.capacity,9),dtype=torch.float32,device=rgb.device)
         counts = torch.empty(n,dtype=torch.int32,device=rgb.device)
         stream = torch.cuda.current_stream(rgb.device).cuda_stream
-        error = self.detect_function(self.handle,rgb.data_ptr(),rows.data_ptr(),counts.data_ptr(),
-                                     self.codes.data_ptr(),c,stream)
+        arguments = [self.handle,rgb.data_ptr(),rows.data_ptr(),counts.data_ptr(),self.codes.data_ptr()]
+        if self.dynamic_code_count:
+            arguments.append(self.codes.numel())
+        error = self.detect_function(*arguments,c,stream)
         if error: raise RuntimeError('CUDA detector launch failed: '+str(error))
         host_counts = counts.cpu().numpy()
         if np.any(host_counts < 0) or np.any(host_counts > self.capacity):

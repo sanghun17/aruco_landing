@@ -151,3 +151,15 @@ extern "C" int aruco_detect6(Workspace* a,const unsigned char* rgb,float* output
   overflow<<<(a->n+63)/64,64,0,stream>>>(*a,count);
   return cudaGetLastError();
 }
+// Explicit table length permits the predefined AprilTag 36h11 dictionary.
+// Both existing entry points retain their original ABI and decoder behavior.
+extern "C" int aruco_detect6_dictionary(Workspace* a,const unsigned char* rgb,float* output,int* count,const unsigned long long* codes,int code_count,int channels,cudaStream_t stream) {
+  if(code_count<=0||code_count%4)return cudaErrorInvalidValue;
+  cudaMemsetAsync(count,0,a->n*sizeof(int),stream);cudaMemsetAsync(a->candidate_count,0,a->n*sizeof(int),stream);
+  int blocks=(a->pixels+255)/256;
+  init<<<blocks,256,0,stream>>>(*a,rgb,channels);unite<<<blocks,256,0,stream>>>(*a);
+  stats<<<blocks,256,0,stream>>>(*a);candidates<<<blocks,256,0,stream>>>(*a);
+  decode<6,unsigned long long><<<a->n*a->cap,1,0,stream>>>(*a,codes,code_count,output,count);
+  overflow<<<(a->n+63)/64,64,0,stream>>>(*a,count);
+  return cudaGetLastError();
+}

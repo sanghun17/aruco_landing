@@ -20,7 +20,12 @@ owns cameras, pad selection, physics adapters, experiment settings and results.
 
 ## CUDA dictionaries
 
-The experimental detector supports DICT_4X4_100 and DICT_6X6_50. The 6x6 path
+The experimental detector supports DICT_4X4_100, DICT_6X6_50 and
+DICT_APRILTAG_36h11. The 6x6 path
 uses a separate C ABI entry point and a 64-bit code table. Existing 4x4 binaries
 remain usable for 4x4 evaluation; rebuild to use 6x6. Dictionary support does not
 establish accuracy equivalence to the CPU OpenCV reference detector.
+AprilTag uses another entry point with an explicit dictionary table length;
+rebuild for that dictionary. Nested patterns can change border connectivity
+and require separate rendered-image qualification; synthetic ID decoding alone
+does not validate a nested pad.

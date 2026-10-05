@@ -16,10 +16,11 @@ def main():
     parser.add_argument('--output',type=Path,required=True)
     args=parser.parse_args()
     report=dict(scope='synthetic decoding only; no renderer or landing accuracy claim',cases=[])
-    for name,ids in [('DICT_4X4_100',[0,17,43,99]),('DICT_6X6_50',[0,1,2,3,4,19,43,49])]:
+    for name,ids in [('DICT_4X4_100',[0,17,43,99]),('DICT_6X6_50',[0,1,2,3,4,19,43,49]),
+                     ('DICT_APRILTAG_36h11',[6,20,7,29,15,21,12,24,9,166])]:
         dictionary=cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco,name))
         detector=GpuArucoDetector(dictionary,args.library)
-        previous=GpuArucoDetector(dictionary,args.previous_library) if dictionary.markerSize==4 else None
+        previous=GpuArucoDetector(dictionary,args.previous_library) if name!='DICT_APRILTAG_36h11' else None
         cpu=cv2.aruco.ArucoDetector(dictionary)
         for mid in ids:
             for rotation in range(4):
@@ -38,13 +39,14 @@ def main():
                     np.testing.assert_array_equal(old[0][0][0],found[0][0][0])
                 report['cases'].append(dict(dictionary=name,id=mid,rotation=rotation,
                     reference_corner_max_delta_px=corner_delta,transferred_bytes=transferred,
-                    previous_4x4_exact_match=previous is not None))
+                    previous_4x4_exact_match=previous is not None and dictionary.markerSize==4,
+                    previous_dictionary_exact_match=previous is not None))
         if previous: previous.close()
         detector.close()
     report['passed']=True
     args.output.parent.mkdir(parents=True,exist_ok=True)
     args.output.write_text(json.dumps(report,indent=2)+'\n')
-    print('Passed',len(report['cases']),'dictionary/ID/rotation cases; 4x4 corners exactly match previous binary')
+    print('Passed',len(report['cases']),'dictionary/ID/rotation cases; 4x4 and 6x6 corners exactly match previous binary')
 
 
 if __name__=='__main__': main()
