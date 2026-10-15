@@ -1,6 +1,7 @@
 """Pad-scoped hardware campaign identities and read-only flight evidence parsing."""
 import hashlib
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -41,9 +42,13 @@ def manifest_pad(document,owner_checkout):
     prefix='/work/ws/aruco-landing/src/aruco_landing/'
     if not configuration.startswith(prefix):raise ValueError('custom pad content not preserved in manifest')
     relative=configuration[len(prefix):]
-    # Trust only this explicitly supplied read-only owner checkout, including a ROS
-    # container mount owned by the host user; never change global Git trust.
-    raw=subprocess.check_output(['git','-c','safe.directory='+str(Path(owner_checkout).resolve()),'-C',str(owner_checkout),'show',revision+':'+relative],stderr=subprocess.DEVNULL)
+    command=['git','-C',str(owner_checkout),'show',revision+':'+relative]
+    owner=Path(owner_checkout).stat()
+    if os.geteuid()==0 and owner.st_uid!=0:
+        # ROS runs as root in Docker; read Git as the checkout owner instead of
+        # relaxing Git ownership checks or changing global trust configuration.
+        command=['setpriv','--reuid='+str(owner.st_uid),'--regid='+str(owner.st_gid),'--clear-groups']+command
+    raw=subprocess.check_output(command,stderr=subprocess.DEVNULL)
     return pad_identity(configuration,raw)
 
 

@@ -64,14 +64,15 @@ def test_wrong_reference_or_set_does_not_seed_progress(tmp_path):
     with pytest.raises(ValueError):recover_progress(s,tmp_path/'checkpoints',[record])
 
 
-def test_old_manifest_reads_exact_committed_pad_with_scoped_git_trust(tmp_path,monkeypatch):
+def test_old_manifest_reads_exact_committed_pad_as_checkout_owner(tmp_path,monkeypatch):
     from aruco_landing.campaign import manifest_pad
     calls=[]
+    monkeypatch.setattr('aruco_landing.campaign.os.geteuid',lambda:0)
     def read(command,**kw):calls.append(command);return b'original committed layout'
     monkeypatch.setattr('aruco_landing.campaign.subprocess.check_output',read)
     path='/work/ws/aruco-landing/src/aruco_landing/config/proposed_pad_1_layout_physical_20260920_runtime.yaml'
     doc=dict(snapshots=dict(start=dict(ros=dict(parameters=dict(physical_pad_estimator=dict(pad_configuration=path))),repositories=dict(aruco_landing=dict(head='a'*40)))))
     result=manifest_pad(doc,tmp_path)
     assert result==pad_identity(path,b'original committed layout')
-    assert calls[0][1:3]==['-c','safe.directory='+str(tmp_path.resolve())]
+    assert calls[0][:4]==['setpriv','--reuid='+str(tmp_path.stat().st_uid),'--regid='+str(tmp_path.stat().st_gid),'--clear-groups']
     assert calls[0][-1]=='a'*40+':config/proposed_pad_1_layout_physical_20260920_runtime.yaml'
