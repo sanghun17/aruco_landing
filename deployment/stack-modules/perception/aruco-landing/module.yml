@@ -4,6 +4,7 @@ description: ArUco detection, calibrated pad/body pose estimation, session-only 
 
 deps:
   apt:
+    - util-linux # setpriv: read host-owned Git evidence without root trust overrides
     - ros-noetic-cv-bridge
     - ros-noetic-image-transport
     - ros-noetic-tf
