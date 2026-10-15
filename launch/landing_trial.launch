@@ -4,6 +4,7 @@
   <arg name="router_fallback" default="true"/>
   <arg name="router_launch_prefix" default=""/>
   <arg name="routed_pose_topic" default="/landing/vision_pose_selected"/>
+  <arg name="termination_height_source" default="dual_height"/>
   <arg name="landing_finish_mode" default="force_disarm"/>
   <arg name="auto_start_on_offboard" default="false"/>
   <arg name="dry_run" default="true"/>
@@ -64,6 +65,7 @@
     <param name="estimation_transition" value="$(arg estimation_transition)"/>
     <param name="routed_pose_topic" value="$(arg routed_pose_topic)"/>
     <param name="auto_start_on_offboard" value="$(arg auto_start_on_offboard)"/>
+    <param name="termination_height_source" value="$(arg termination_height_source)"/>
     <param name="landing_finish_mode" value="$(arg landing_finish_mode)"/>
     <param name="dry_run" value="$(arg dry_run)"/>
     <param name="extrinsic_file" value="$(arg config_root)/calibration/20260919/base_link_to_see3cam_optical_frame.yaml"/>

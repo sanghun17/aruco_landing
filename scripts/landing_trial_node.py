@@ -64,7 +64,8 @@ class LandingTrial:
         self.mocap_topic=rospy.get_param('~mocap_topic','/vrpn_client_node/pure/pose')
         self.normal_topic=rospy.get_param('~normal_topic','/local_controller/setpoint_raw/local')
         if self.normal_topic=='/mavros/setpoint_raw/local':raise ValueError('flight-safety must own MAVROS setpoints')
-        self.trial=Trial(float(rospy.get_param('~marker_confirm_s',1.)),float(rospy.get_param('~marker_loss_s',.5)))
+        self.trial=Trial(float(rospy.get_param('~marker_confirm_s',1.)),float(rospy.get_param('~marker_loss_s',.5)),
+            termination_height_source=rospy.get_param('~termination_height_source','dual_height'))
         self.trial.finish_mode=rospy.get_param('~landing_finish_mode','auto_land')
         if self.trial.finish_mode not in ('auto_land','force_disarm'):raise ValueError('invalid landing_finish_mode')
         self.cut_pending=False;self.cut_started=None;self.cut_result=None
@@ -323,6 +324,15 @@ class LandingTrial:
         with self.lock:
             self.capture_hold();self.trial.fail('operator_abort');return TriggerResponse(True,'trial failed; holding current position')
 
+    def mocap_camera_height(self,now):
+        if not self.aligned or self.pad is None or not self.fresh('mocap',now):return None
+        msg=self.inputs['mocap']
+        if msg.header.frame_id!=self.global_frame:return None
+        body=transform(msg)
+        if not valid_transform(body) or not valid_transform(self.pad):return None
+        height=float((np.linalg.inv(self.pad)@body@self.X)[2,3])
+        return height if math.isfinite(height) else None
+
     def request_cut(self):
         if self.dry or self.cut_pending:return
         self.cut_pending=True
@@ -331,8 +341,10 @@ class LandingTrial:
                 with self.lock:
                     now=time.monotonic();state=self.inputs.get('state')
                     good,height,_=self.marker(now)
-                    h=float((np.linalg.inv(self.pad)@transform(self.inputs['mocap'])@self.X)[2,3]) if self.pad is not None and self.fresh('mocap',now) else None
-                    allowed=self.trial.phase=='CUT_WAIT' and state and state.armed and state.mode=='OFFBOARD' and self.health(now) and good and height is not None and 0<=height<=.2 and h is not None and 0<=h<=.25
+                    h=self.mocap_camera_height(now)
+                    allowed=bool(self.trial.phase=='CUT_WAIT' and state and self.trial.can_force_disarm(
+                        offboard=state.mode=='OFFBOARD',armed=state.armed,healthy=self.health(now),
+                        mocap_height=h,marker_good=good,marker_height=height))
                 self.cut_result=bool(allowed and self.termination_service().success)
             except rospy.ServiceException as error:
                 self.cut_result=False;rospy.logerr('termination request failed: %s',error)
@@ -436,10 +448,10 @@ class LandingTrial:
             if self.auto_start and (self.entry_time is None or state.mode not in ('OFFBOARD','AUTO.LAND') or marker_time is None or marker_time<self.entry_time):
                 good,height,marker_time=False,None,None
             ext=self.inputs.get('extended');landed=bool(self.fresh('state',now,2.)and state.connected and self.fresh('extended',now,2.)and ext.landed_state==ExtendedState.LANDED_STATE_ON_GROUND)
-            mocap_height=None
-            if self.aligned and self.pad is not None and self.fresh('mocap',now):
-                mocap_height=float((np.linalg.inv(self.pad)@transform(self.inputs['mocap'])@self.X)[2,3])
-            if self.transition and self.router_status.get('fallback_latched') and self.trial.phase in ('APPROACH','DESCEND','AUTO_LAND'):
+            mocap_height=self.mocap_camera_height(now)
+            terminal_ready=self.trial.can_force_disarm(offboard=state.mode=='OFFBOARD',armed=state.armed,
+                healthy=healthy,mocap_height=mocap_height,marker_good=good,marker_height=height)
+            if self.transition and self.router_status.get('fallback_latched') and self.trial.phase in ('APPROACH','DESCEND','AUTO_LAND') and not terminal_ready:
                 self.trial.fail('marker_source_lost_trial_failed');self.capture_hold()
             estimation_ready=not self.transition or (self.router_status.get('source')=='marker' and self.router_status.get('last_output_source')=='marker' and self.router_status.get('switch_check',{}).get('consistent',False) and self.fresh('routed',now) and healthy)
             if self.trajectory_set is not None and self.trial.phase=='APPROACH':
@@ -569,7 +581,7 @@ class LandingTrial:
                 mission_hint.update(ground_start_enabled=True,offboard_entry_ready=entry_ready)
             self.mission_pub.publish(json.dumps(mission_hint))
             self.status.publish(json.dumps(dict(phase=self.trial.phase,reason=self.trial.reason,dry_run=self.dry,
-                estimation_source=self.router_status.get('source','unknown') if self.transition else 'optitrack',estimation_transition=self.transition,landing_finish_mode=self.trial.finish_mode,mocap_camera_height_m=mocap_height,force_disarm_ack=self.cut_result,offboard_entry_ready=entry_ready,healthy=bool(healthy),marker_qualified=bool(good),marker_height_m=height,
+                estimation_source=self.router_status.get('source','unknown') if self.transition else 'optitrack',estimation_transition=self.transition,landing_finish_mode=self.trial.finish_mode,termination_height_source=self.trial.termination_height_source,termination_height_m=self.trial.contact_height_m,mocap_camera_height_m=mocap_height,force_disarm_ack=self.cut_result,offboard_entry_ready=entry_ready,healthy=bool(healthy),marker_qualified=bool(good),marker_height_m=height,
                 marker_confirm_s=self.trial.marker_confirm_s,marker_loss_s=self.trial.marker_loss_s,
                 repeat_test=self.repeat.status() if self.repeat else None,data_sync_ready=data_ready,
                 trajectory_set=self.trajectory_progress.status() if self.trajectory_progress else None,

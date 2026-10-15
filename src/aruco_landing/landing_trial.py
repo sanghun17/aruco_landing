@@ -14,9 +14,12 @@ class Trial:
     last_good: object = None
     prepared_at: object = None
     finish_mode: str = 'auto_land'
+    termination_height_source: str = 'dual_height'
 
     def __post_init__(self):
         import math
+        if self.termination_height_source not in ('dual_height','optitrack'):
+            raise ValueError('invalid termination height source')
         if self.finish_mode not in ('auto_land','force_disarm'):raise ValueError('invalid finish mode')
         if not all(math.isfinite(x) and x>0 for x in
                    (self.marker_confirm_s,self.marker_loss_s,self.contact_height_m,self.prestream_s)):
@@ -34,6 +37,16 @@ class Trial:
 
     def fail(self, reason):
         self.phase='FAILED_HOLD';self.reason=reason;self.good_since=None
+
+    def can_force_disarm(self, *, offboard, armed, healthy, mocap_height,
+                         marker_good=False, marker_height=None):
+        """Caller supplies only fresh, aligned pad-relative camera heights."""
+        if not (self.finish_mode=='force_disarm' and self.phase in ('DESCEND','CUT_WAIT')
+                and offboard and armed and healthy):return False
+        if self.termination_height_source=='optitrack':
+            return mocap_height is not None and 0<=mocap_height<=self.contact_height_m
+        return (marker_good and marker_height is not None and 0<=marker_height<=self.contact_height_m
+                and mocap_height is not None and 0<=mocap_height<=.25)
 
     def step(self, now, *, offboard, armed, healthy, marker_good, marker_height=None,
              landed=False, auto_land=False, marker_time=None, mocap_height=None, estimation_ready=True):
@@ -65,13 +78,17 @@ class Trial:
             if estimation_ready and self.good_since is not None and self.last_good-self.good_since>=self.marker_confirm_s:
                 self.phase='DESCEND';self.reason='marker_qualified'
         elif old in ('DESCEND','AUTO_LAND'):
-            if not landed and (self.last_good is None or now-self.last_good>=self.marker_loss_s):
+            if old=='DESCEND' and self.can_force_disarm(offboard=offboard,armed=armed,healthy=healthy,
+                    mocap_height=mocap_height,marker_good=marker_good,marker_height=marker_height):
+                self.phase='CUT_WAIT'
+                self.reason=('optitrack_height_force_disarm_requested' if self.termination_height_source=='optitrack'
+                             else 'dual_height_force_disarm_requested')
+            elif not landed and (self.last_good is None or now-self.last_good>=self.marker_loss_s):
                 self.fail('marker_lost_trial_failed')
             elif old=='DESCEND' and marker_good and marker_height is not None and 0<=marker_height<=self.contact_height_m:
                 if self.finish_mode=='auto_land':
                     self.phase='AUTO_LAND';self.reason='marker_height_reached_handoff_to_px4'
-                elif mocap_height is not None and 0<=mocap_height<=.25:
-                    self.phase='CUT_WAIT';self.reason='dual_height_force_disarm_requested'
+
         return self.phase
 
 

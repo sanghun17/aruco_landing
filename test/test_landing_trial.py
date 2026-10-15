@@ -85,3 +85,41 @@ class TransitionHandshakeTest(unittest.TestCase):
         t.step(now+.01,offboard=True,armed=True,healthy=True,marker_good=True,
                marker_time=now+.01,estimation_ready=True)
         self.assertEqual(t.phase,'DESCEND')
+
+class OptiTrackTerminationTest(unittest.TestCase):
+    def trial(self,phase='DESCEND'):
+        return Trial(phase=phase,last_good=10.,prepared_at=0.,finish_mode='force_disarm',termination_height_source='optitrack')
+
+    def step(self,t,**kw):
+        args=dict(offboard=True,armed=True,healthy=True,marker_good=False,mocap_height=.19)
+        args.update(kw)
+        return t.step(10.6,**args)
+
+    def test_low_height_takes_priority_over_marker_loss_timeout(self):
+        t=self.trial()
+        self.assertEqual(self.step(t),'CUT_WAIT')
+        self.assertEqual(t.reason,'optitrack_height_force_disarm_requested')
+        self.assertEqual(self.step(t,armed=False),'COMPLETE')
+
+    def test_high_missing_or_invalid_height_never_cuts(self):
+        for height in [.200001,.25,None,-.01,float('nan'),float('inf')]:
+            with self.subTest(height=height):
+                self.assertEqual(self.step(self.trial(),mocap_height=height),'FAILED_HOLD')
+        for height in [0.,.2]:
+            self.assertEqual(self.step(self.trial(),mocap_height=height),'CUT_WAIT')
+
+    def test_pilot_health_and_phase_gates_remain(self):
+        for kw in [dict(offboard=False),dict(armed=False),dict(healthy=False)]:
+            self.assertNotEqual(self.step(self.trial(),**kw),'CUT_WAIT')
+        for phase in ['IDLE','PRESTREAM','APPROACH','FAILED_HOLD','CANCELLED','AUTO_LAND']:
+            self.assertNotEqual(self.step(self.trial(phase)),'CUT_WAIT')
+
+    def test_worker_recheck_uses_same_predicate_without_marker(self):
+        t=self.trial('CUT_WAIT')
+        args=dict(offboard=True,armed=True,healthy=True,mocap_height=.19)
+        self.assertTrue(t.can_force_disarm(**args))
+        for kw in [dict(offboard=False),dict(armed=False),dict(healthy=False),dict(mocap_height=None),dict(mocap_height=.21)]:
+            self.assertFalse(t.can_force_disarm(**dict(args,**kw)))
+
+    def test_invalid_source_rejected(self):
+        with self.assertRaises(ValueError):Trial(termination_height_source='gt')
