@@ -8,6 +8,7 @@
   <arg name="auto_switch" default="false"/>
   <arg name="auto_fallback_to_optitrack" default="false"/>
   <arg name="marker_loss_timeout_s" default="0.5"/>
+  <arg name="max_switch_translation_jump_m" default="0.15"/>
   <arg name="require_trial_enable" default="false"/>
   <arg name="reject_inconsistent_marker" default="false"/>
   <arg name="launch_prefix" default=""/>
@@ -22,6 +23,7 @@
     <param name="auto_switch" value="$(arg auto_switch)"/>
     <param name="auto_fallback_to_optitrack" value="$(arg auto_fallback_to_optitrack)"/>
     <param name="marker_loss_timeout_s" value="$(arg marker_loss_timeout_s)"/>
+    <param name="max_switch_translation_jump_m" value="$(arg max_switch_translation_jump_m)"/>
     <param name="stable_duration_s" value="1.0"/>
     <param name="stable_min_samples" value="30"/>
   </node>

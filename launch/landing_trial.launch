@@ -11,6 +11,7 @@
   <arg name="config_root" default="/work/stacks/aruco-landing-jetson/config"/>
   <arg name="marker_confirm_s" default="1.0"/>
   <arg name="marker_loss_s" default="0.5"/>
+  <arg name="max_switch_translation_jump_m" default="$(optenv LANDING_MAX_SWITCH_TRANSLATION_JUMP_M 0.15)"/>
   <arg name="approach_speed_mps" default="0.5"/>
   <arg name="landing_horizontal_speed_mps" default="0.5"/>
   <arg name="descent_speed_mps" default="0.3"/>
@@ -31,6 +32,7 @@
     <arg name="auto_switch" value="$(arg router_auto_switch)"/>
     <arg name="auto_fallback_to_optitrack" value="$(arg router_fallback)"/>
     <arg name="marker_loss_timeout_s" value="$(arg marker_loss_s)"/>
+    <arg name="max_switch_translation_jump_m" value="$(arg max_switch_translation_jump_m)"/>
     <arg name="require_trial_enable" value="true"/>
     <arg name="reject_inconsistent_marker" value="true"/>
     <arg name="output_topic" value="$(arg routed_pose_topic)"/>
