@@ -41,7 +41,9 @@ def manifest_pad(document,owner_checkout):
     prefix='/work/ws/aruco-landing/src/aruco_landing/'
     if not configuration.startswith(prefix):raise ValueError('custom pad content not preserved in manifest')
     relative=configuration[len(prefix):]
-    raw=subprocess.check_output(['git','-C',str(owner_checkout),'show',revision+':'+relative],stderr=subprocess.DEVNULL)
+    # Trust only this explicitly supplied read-only owner checkout, including a ROS
+    # container mount owned by the host user; never change global Git trust.
+    raw=subprocess.check_output(['git','-c','safe.directory='+str(Path(owner_checkout).resolve()),'-C',str(owner_checkout),'show',revision+':'+relative],stderr=subprocess.DEVNULL)
     return pad_identity(configuration,raw)
 
 
@@ -52,6 +54,8 @@ def flight_record(bag_path,owner_checkout):
     document=yaml.safe_load(manifest.read_text())
     if not document.get('session',{}).get('disarm_wall_time_utc'):
         raise ValueError('recording manifest is not finalized')
+    if not document.get('snapshots',{}).get('start',{}).get('ros',{}).get('parameters',{}).get('landing_trial',{}).get('trajectory_set_file'):
+        raise ValueError('not a selected-trajectory flight')
     pad=manifest_pad(document,owner_checkout)
     selection=None;set_sha=None;complete=False;failed=False;final=None;faults=set()
     armed=None;ground=None;pad_seen=None

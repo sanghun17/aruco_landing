@@ -32,6 +32,7 @@ def main():
     for bag in sorted(args.bag_dir.glob('*.bag')):
         try:records.append(flight_record(bag,owner))
         except Exception as error:skipped.append(dict(bag=bag.name,reason=str(error)))
+    if not records:raise RuntimeError('no usable finalized trajectory recordings; progress was not changed: '+str(skipped))
     state=rospy.wait_for_message('/mavros/state',State,timeout=4.)
     if not state.connected or state.armed or state.mode!='POSCTL':raise RuntimeError('pilot state changed during recovery')
     result=recover_progress(TrajectorySet(args.set_file),args.progress_root,records)
