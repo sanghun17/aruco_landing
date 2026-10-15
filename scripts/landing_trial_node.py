@@ -27,6 +27,7 @@ from aruco_landing.physical_pad import SessionAlignment, valid_transform
 from aruco_landing.pose_alignment import pose_matrix, matrix_pose, quaternion_distance_deg
 from aruco_landing.yaw_control import yaw_feedback
 from aruco_landing.repeat_trial import RepeatTrial
+from aruco_landing.trajectory_set import TrajectorySet, TrajectoryProgress
 
 
 def transform(msg):
@@ -78,6 +79,17 @@ class LandingTrial:
         with open(rospy.get_param('~extrinsic_file'))as f:mount=yaml.safe_load(f)
         self.X=np.array(mount['matrix_row_major']).reshape(4,4)
         if mount['validation_result']!='PASS'or not valid_transform(self.X):raise ValueError('invalid mount')
+        self.trajectory_set=None;self.trajectory_progress=None;self.trajectory_ack={}
+        self.trajectory_goal=None;self.trajectory_pad=None;self.trajectory_settled_since=None
+        self.last_selection_publish=-1e30;self.trajectory_z_bounds=None
+        set_path=rospy.get_param('~trajectory_set_file','')
+        if set_path:
+            if self.repeat is None:raise ValueError('trajectory set requires existing ground repeat mode')
+            self.trajectory_set=TrajectorySet(set_path)
+            self.trajectory_progress=TrajectoryProgress(self.trajectory_set,rospy.get_param('~trajectory_progress_file'))
+            if 'z' in geofence['enabled_axes']:
+                self.trajectory_z_bounds=tuple(map(float,geofence['box']['z']))
+            self.selection_pub=rospy.Publisher('/landing/trajectory/selection',String,queue_size=1,latch=True)
         self.pad=None;self.aligned=False;self.hold=None;self.altitude=None;self.heading=None
         self.state_phase='IDLE';self.land_requested=False;self.last_mode_call=-1e30;self.mode_pending=False;self.handoff_started=None;self.last_mux_call=-1e30
         self.last_matched=-1e30;self.vision_mismatch=False;self.mocap_by_stamp={};self.marker_cache=None
@@ -109,7 +121,8 @@ class LandingTrial:
             ('marker_camera','/landing/camera_pose_pad',PoseWithCovarianceStamped),
             ('command','/landing/trial/landing_cmd_pad',TwistStamped),
             ('routed',self.routed_topic,PoseStamped),
-            ('router','/landing/pose_transition/status',String)]
+            ('router','/landing/pose_transition/status',String),
+            ('trajectory_ready','/landing/trajectory/ready',String)]
         self.subscribers=[rospy.Subscriber(topic,kind,self.receive,key,queue_size=10,tcp_nodelay=True)for key,topic,kind in topics]
         rospy.Service('~start',Trigger,self.start);rospy.Service('~reset',Trigger,self.reset);rospy.Service('~abort',Trigger,self.abort)
         rospy.Timer(rospy.Duration(1/60.),self.tick)
@@ -196,6 +209,9 @@ class LandingTrial:
                 except (ValueError,TypeError):return
             if key=='mocap'and m.header.frame_id!=self.global_frame:return
             self.inputs[key]=m;self.receipts[key]=now
+            if key=='trajectory_ready':
+                try:self.trajectory_ack=json.loads(m.data)
+                except (ValueError,TypeError):self.trajectory_ack={}
             if key=='router':
                 try:self.router_status=json.loads(m.data)
                 except (ValueError,TypeError):self.router_status={}
@@ -205,11 +221,11 @@ class LandingTrial:
             if key=='pad':
                 T=transform(m)
                 if m.header.frame_id==self.global_frame and valid_transform(T):
-                    if self.pad is not None and not np.allclose(self.pad,T,atol=1e-5)and self.trial.phase in ('APPROACH','DESCEND','AUTO_LAND'):
+                    if self.pad is not None and not np.allclose(self.pad,T,atol=1e-5)and (self.trial.phase in ('APPROACH','DESCEND','AUTO_LAND') or (self.trajectory_progress is not None and self.trajectory_progress.active is not None)):
                         self.trial.fail('session_pad_reference_changed');self.capture_hold()
                     self.pad=T
             elif key=='aligned':
-                if self.aligned and not m.data and self.trial.phase in ('APPROACH','DESCEND','AUTO_LAND'):
+                if self.aligned and not m.data and (self.trial.phase in ('APPROACH','DESCEND','AUTO_LAND') or (self.trajectory_progress is not None and self.trajectory_progress.active is not None)):
                     self.trial.fail('session_alignment_reset');self.capture_hold()
                 self.aligned=m.data
                 if not self.aligned:self.pad=None
@@ -357,6 +373,22 @@ class LandingTrial:
             if state is None:return
             healthy=self.health(now)
             data_ready=self.sync_ready() if self.repeat else True
+            if self.trajectory_progress is not None:
+                progress=self.trajectory_progress
+                if progress.active is not None:
+                    ext=self.inputs.get('extended')
+                    grounded=self.fresh('extended',now,2.) and ext.landed_state==ExtendedState.LANDED_STATE_ON_GROUND
+                    try:
+                        if self.trial.phase=='COMPLETE' and grounded and not state.armed and not progress.halted:
+                            progress.complete(grounded=True,disarmed=True)
+                            self.entry_ready=False;self.standby_since=None;self.trajectory_ack={}
+                        elif self.trial.phase in ('FAILED_HOLD','CANCELLED') and not progress.halted:
+                            progress.fail()
+                    except OSError:
+                        self.trial.fail('trajectory_progress_write_failed');self.capture_hold()
+                data_ready=data_ready and not progress.halted
+                if progress.active is None:
+                    data_ready=data_ready and progress.available
             if self.auto_start:
                 standby=state.mode not in ('OFFBOARD','AUTO.LAND') and self.trial.phase in ('IDLE','CANCELLED','COMPLETE')
                 if self.repeat and standby and not state.armed and data_ready and not healthy:
@@ -364,6 +396,9 @@ class LandingTrial:
                 if standby and healthy and data_ready:
                     if self.standby_since is None:self.standby_since=now
                     self.prepare_standby(now)
+                    if self.trajectory_set is not None and now-self.last_selection_publish>=.5:
+                        self.selection_pub.publish(json.dumps(self.trajectory_set.selection(self.trajectory_progress.index)))
+                        self.last_selection_publish=now
                 elif state.mode!='OFFBOARD':self.standby_since=None
                 entered=state.mode=='OFFBOARD' and self.last_fcu_mode not in (None,'OFFBOARD')
                 if entered and self.trial.phase not in ('AUTO_LAND','CUT_WAIT'):
@@ -371,15 +406,27 @@ class LandingTrial:
                     airborne=self.fresh('extended',now,2.) and ext.landed_state==ExtendedState.LANDED_STATE_IN_AIR
                     grounded=self.fresh('extended',now,2.) and ext.landed_state==ExtendedState.LANDED_STATE_ON_GROUND
                     ready=healthy and self.entry_ready and self.standby_since is not None and now-self.standby_since>=1.
+                    if self.trajectory_set is not None:
+                        ready=bool(ready and self.trajectory_progress.available and self.aligned and self.pad is not None
+                            and self.fresh('trajectory_ready',now,1.5)
+                            and self.trajectory_ack==self.trajectory_set.selection(self.trajectory_progress.index))
                     allowed=ready and state.armed and airborne and self.repeat is None
                     self.entry_ready=False;self.standby_since=None;self.marker_cache=None
                     if self.repeat and ready and data_ready and grounded and not state.armed and self.fresh('velocity',now):
                         try:
-                            self.repeat.begin(now,transform(self.inputs['mocap'])[:3,3])
+                            target=None
+                            if self.trajectory_set is not None:
+                                G_B=transform(self.inputs['mocap'])
+                                target=self.trajectory_set.body_start(self.trajectory_progress.index,self.pad,
+                                    G_B[:3,:3],self.X[:3,3],self.repeat.bounds,self.trajectory_z_bounds)
+                                self.trajectory_goal=target;self.trajectory_pad=self.pad.copy()
+                                self.trajectory_settled_since=None
+                            self.repeat.begin(now,transform(self.inputs['mocap'])[:3,3],target=target)
+                            if self.trajectory_progress is not None:self.trajectory_progress.begin()
                             self.trial.phase='ARMING';self.trial.reason='pilot_requested_ground_repeat'
                             self.entry_time=now;self.capture_hold();self.heading=yaw(self.hold)
                             self.cut_result=None;self.request_arm()
-                        except ValueError as error:self.trial.fail(str(error))
+                        except (ValueError,OSError) as error:self.trial.fail(str(error))
                     elif allowed and self.trial.prepare(now-1.):
                         self.entry_time=now;self.capture_hold()
                     else:
@@ -395,6 +442,19 @@ class LandingTrial:
             if self.transition and self.router_status.get('fallback_latched') and self.trial.phase in ('APPROACH','DESCEND','AUTO_LAND'):
                 self.trial.fail('marker_source_lost_trial_failed');self.capture_hold()
             estimation_ready=not self.transition or (self.router_status.get('source')=='marker' and self.router_status.get('last_output_source')=='marker' and self.router_status.get('switch_check',{}).get('consistent',False) and self.fresh('routed',now) and healthy)
+            if self.trajectory_set is not None and self.trial.phase=='APPROACH':
+                v=self.inputs.get('velocity')
+                speed=np.linalg.norm([v.twist.linear.x,v.twist.linear.y,v.twist.linear.z]) if v else float('inf')
+                close=(self.trajectory_goal is not None and self.fresh('mocap',now) and self.fresh('velocity',now)
+                    and np.linalg.norm(transform(self.inputs['mocap'])[:3,3]-self.trajectory_goal)<=self.repeat.tolerance
+                    and speed<=self.repeat.velocity_tolerance)
+                if not close:self.trajectory_settled_since=None
+                elif self.trajectory_settled_since is None:self.trajectory_settled_since=now
+                estimation_ready=bool(estimation_ready and self.trajectory_settled_since is not None
+                    and now-self.trajectory_settled_since>=self.repeat.dwell
+                    and self.trajectory_ack==self.trajectory_set.selection(self.trajectory_progress.active))
+                if now-self.repeat.started>self.repeat.timeout:
+                    self.trial.fail('trajectory_initial_alignment_timeout');self.capture_hold()
             previous=self.trial.phase
             if self.repeat and self.trial.phase in self.repeat.PHASES:
                 v=self.inputs.get('velocity');speed=math.sqrt(v.twist.linear.x**2+v.twist.linear.y**2+v.twist.linear.z**2) if v else float('inf')
@@ -461,9 +521,17 @@ class LandingTrial:
                 L_B=transform(self.inputs['local']);G_B=transform(self.inputs[control_key]);L_G=L_B[:3,:3]@G_B[:3,:3].T
                 velocity=None;rate=0.
                 if phase=='APPROACH':
-                    goal=self.target  # known global pad XY; pre-OFFBOARD detections do not redirect approach
-                    v=self.kp*(goal-G_B[:2,3]);v*=min(1.,self.speed/max(np.linalg.norm(v),1e-9));velocity=L_G@np.r_[v,0.];velocity[2]=0.
-                    if good or (self.transition and self.router_status.get('source')=='marker'):velocity[:]=0.  # hold altitude/position while validating marker dwell
+                    if self.trajectory_set is not None:
+                        # Stay at the selected camera-path start, not pad center,
+                        # while original marker/mocap alignment dwell completes.
+                        v=self.kp*(self.trajectory_goal-G_B[:3,3])
+                        v=np.array(limit_horizontal_velocity(v,self.repeat.speed))
+                        v[2]=np.clip(v[2],-self.repeat.vertical_speed,self.repeat.vertical_speed)
+                        velocity=L_G@v
+                    else:
+                        goal=self.target  # known global pad XY; pre-OFFBOARD detections do not redirect approach
+                        v=self.kp*(goal-G_B[:2,3]);v*=min(1.,self.speed/max(np.linalg.norm(v),1e-9));velocity=L_G@np.r_[v,0.];velocity[2]=0.
+                        if good or (self.transition and self.router_status.get('source')=='marker'):velocity[:]=0.  # hold altitude/position while validating marker dwell
                     target_yaw=self.heading
                     error=math.atan2(math.sin(target_yaw-yaw(L_B)),math.cos(target_yaw-yaw(L_B)));rate=np.clip(error,-self.yaw_rate,self.yaw_rate)
                 elif good and estimation_ready and self.fresh('command',now,.1):
@@ -477,7 +545,7 @@ class LandingTrial:
                     sp.type_mask=PositionTarget.IGNORE_AFX|PositionTarget.IGNORE_AFY|PositionTarget.IGNORE_AFZ|PositionTarget.IGNORE_YAW
                     speed_limit=self.speed if phase=='APPROACH' else self.landing_speed
                     sp.velocity.x,sp.velocity.y,sp.velocity.z=limit_horizontal_velocity(velocity,speed_limit);sp.yaw_rate=float(np.clip(rate,-self.yaw_rate,self.yaw_rate))
-                    if phase=='APPROACH':sp.position.z=self.altitude
+                    if phase=='APPROACH' and self.trajectory_set is None:sp.position.z=self.altitude
                     self.capture_hold()
             if phase=='AUTO_LAND':
                 if state.mode=='OFFBOARD':self.request_mode('AUTO.LAND',now)
@@ -485,8 +553,12 @@ class LandingTrial:
             if sp is not None:
                 sp.header.stamp=rospy.Time.now();self.pub.publish(sp)
                 if self.live is not None:self.live.publish(sp)
-            mission_state={'FAILED_HOLD':'hold_failed','AUTO_LAND':'landing','COMPLETE':'complete','CUT_WAIT':'terminating'}.get(self.trial.phase,'active'if self.trial.phase in ('ARMING','TAKEOFF','CENTER','RANDOM_POSITION','APPROACH','DESCEND')else 'idle')
+            mission_state={'FAILED_HOLD':'hold_failed','AUTO_LAND':'landing','COMPLETE':'complete','CUT_WAIT':'terminating'}.get(self.trial.phase,'active'if self.trial.phase in ('ARMING','TAKEOFF','CENTER','RANDOM_POSITION','INITIAL_POSITION','APPROACH','DESCEND')else 'idle')
             entry_ready=bool(self.entry_ready and healthy and data_ready and self.standby_since is not None and now-self.standby_since>=1.)
+            if self.trajectory_set is not None:
+                entry_ready=bool(entry_ready and self.trajectory_progress.available and self.aligned and self.pad is not None
+                    and self.fresh('trajectory_ready',now,1.5)
+                    and self.trajectory_ack==self.trajectory_set.selection(self.trajectory_progress.index))
             mission_hint=dict(state=mission_state,dry_run=self.dry,source='landing_trial')
             if self.repeat:
                 # Optional, stack-neutral LED contract. Indicate readiness only
@@ -500,6 +572,8 @@ class LandingTrial:
                 estimation_source=self.router_status.get('source','unknown') if self.transition else 'optitrack',estimation_transition=self.transition,landing_finish_mode=self.trial.finish_mode,mocap_camera_height_m=mocap_height,force_disarm_ack=self.cut_result,offboard_entry_ready=entry_ready,healthy=bool(healthy),marker_qualified=bool(good),marker_height_m=height,
                 marker_confirm_s=self.trial.marker_confirm_s,marker_loss_s=self.trial.marker_loss_s,
                 repeat_test=self.repeat.status() if self.repeat else None,data_sync_ready=data_ready,
+                trajectory_set=self.trajectory_progress.status() if self.trajectory_progress else None,
+                trajectory_controller_ready=self.trajectory_ack if self.trajectory_set else None,
                 data_sync_reason=self.sync_reason if self.repeat else 'not_required',
                 pad_alignment_ready=self.aligned,command_frame='MAVROS local ENU',live_output=self.normal_topic if self.live else None)))
 

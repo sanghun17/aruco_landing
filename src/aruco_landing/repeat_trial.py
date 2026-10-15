@@ -4,7 +4,7 @@ import random
 
 
 class RepeatTrial:
-    PHASES = ('ARMING', 'TAKEOFF', 'CENTER', 'RANDOM_POSITION')
+    PHASES = ('ARMING', 'TAKEOFF', 'CENTER', 'RANDOM_POSITION', 'INITIAL_POSITION')
 
     def __init__(self, config, geofence):
         self.height = float(config['height_m'])
@@ -45,22 +45,31 @@ class RepeatTrial:
         self.settled_since = None
         self.started = None
         self.origin = None
+        self.initial_goal = None
+        self.transfer_height = self.height
 
-    def begin(self, now, position):
+    def begin(self, now, position, target=None):
         x, y, z = map(float, position)
         if not all(math.isfinite(v) for v in (x, y, z)) or not 0 <= z <= self.ground_max:
             raise ValueError('ground start requires body Z within configured ground range')
         if not all(lo <= v <= hi for v, (lo, hi) in zip((x, y), self.bounds)):
             raise ValueError('ground start outside inset experiment box')
-        for _ in range(10000):
-            target = [self.rng.uniform(*b) for b in self.bounds]
-            if math.hypot(*target) >= self.min_radius:
-                break
+        self.initial_goal = None
+        self.transfer_height = self.height
+        if target is not None:
+            goal=tuple(map(float,target))
+            if len(goal)!=3 or not all(math.isfinite(v) for v in goal) or goal[2]<=self.ground_max or not all(lo<=v<=hi for v,(lo,hi) in zip(goal[:2],self.bounds)):
+                raise ValueError('invalid selected reference start position')
+            self.initial_goal=goal;self.transfer_height=goal[2]
+            target=goal[:2]
         else:
-            raise ValueError('unable to sample random target')
+            for _ in range(10000):
+                target = [self.rng.uniform(*b) for b in self.bounds]
+                if math.hypot(*target) >= self.min_radius:break
+            else:raise ValueError('unable to sample random target')
         self.number += 1
         self.origin = (x, y, z)
-        self.random_goal = tuple(target) + (self.height,)
+        self.random_goal = None if self.initial_goal is not None else tuple(target) + (self.height,)
         self.phase = 'ARMING'
         self.goal = self.origin
         self.started = now
@@ -82,7 +91,7 @@ class RepeatTrial:
         if self.phase == 'ARMING':
             if armed:
                 self.phase = 'TAKEOFF'
-                self.goal = self.origin[:2] + (self.height,)
+                self.goal = self.origin[:2] + (self.transfer_height,)
                 self.started = now
             return self.phase, None
         if not armed:
@@ -96,11 +105,11 @@ class RepeatTrial:
             self.settled_since = now
         elif now - self.settled_since >= self.dwell:
             if self.phase == 'TAKEOFF':
-                self.phase, self.goal = 'CENTER', (0., 0., self.height)
+                self.phase, self.goal = ('INITIAL_POSITION',self.initial_goal) if self.initial_goal is not None else ('CENTER', (0., 0., self.height))
             elif self.phase == 'CENTER':
                 self.phase, self.goal = 'RANDOM_POSITION', self.random_goal
             else:
-                self.phase, self.goal = 'APPROACH', (0., 0., self.height)
+                self.phase, self.goal = 'APPROACH', self.initial_goal if self.initial_goal is not None else (0., 0., self.height)
             self.settled_since = None
             self.started = now
         return self.phase, None
@@ -108,4 +117,5 @@ class RepeatTrial:
     def status(self):
         return dict(trial=self.number, phase=self.phase, goal_global_m=self.goal,
                     random_goal_global_m=self.random_goal, height_m=self.height,
+                    initial_goal_global_m=self.initial_goal,transfer_height_m=self.transfer_height,
                     bounds_xy_m=self.bounds, random_seed=self.seed)

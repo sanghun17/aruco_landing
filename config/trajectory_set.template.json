@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "reference_id_convention": "zero_based_bank_index",
+  "banks": {
+    "inside": {"path": "REPLACE_WITH_ORIGINAL_BANK_ROOT/inside/bank.npz", "sha256": "b03e27d92d0a9eaa8dd7f0b84412edc32ff6ffd422385e79dcaec0ded6ca22b2"},
+    "mixed": {"path": "REPLACE_WITH_ORIGINAL_BANK_ROOT/mixed/bank.npz", "sha256": "ffd973b607d8863359aae7b78ef8e3eccbc57e0ef65167b454356f5b33a1335a"},
+    "outside": {"path": "REPLACE_WITH_ORIGINAL_BANK_ROOT/outside/bank.npz", "sha256": "28675dde43209928c668be9c0bb65f2cbdc6873824937f56c415a05b5ed680d9"}
+  },
+  "selections": []
+}
