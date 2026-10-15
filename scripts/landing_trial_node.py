@@ -87,7 +87,8 @@ class LandingTrial:
         if set_path:
             if self.repeat is None:raise ValueError('trajectory set requires existing ground repeat mode')
             self.trajectory_set=TrajectorySet(set_path)
-            self.trajectory_progress=TrajectoryProgress(self.trajectory_set,rospy.get_param('~trajectory_progress_file'))
+            self.trajectory_progress=TrajectoryProgress(self.trajectory_set,rospy.get_param('~trajectory_progress_file'),
+                restart_on_start=bool(rospy.get_param('~trajectory_restart_on_start',False)))
             if 'z' in geofence['enabled_axes']:
                 self.trajectory_z_bounds=tuple(map(float,geofence['box']['z']))
             self.selection_pub=rospy.Publisher('/landing/trajectory/selection',String,queue_size=1,latch=True)

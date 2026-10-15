@@ -3,6 +3,7 @@ import hashlib
 import json
 import math
 import os
+import time
 from pathlib import Path
 import numpy as np
 from aruco_landing.hardware_reference import HardwareReference
@@ -71,10 +72,17 @@ class TrajectorySet:
 
 
 class TrajectoryProgress:
-    def __init__(self,trajectory_set,path):
+    def __init__(self,trajectory_set,path,*,restart_on_start=False):
         self.set=trajectory_set;self.path=Path(path)
         self.completed=[];self.active=None;self.halted=False
-        if self.path.exists():
+        if restart_on_start:
+            if self.path.exists():
+                # Preserve exact previous bytes before atomically replacing progress.
+                backup=self.path.with_name(self.path.stem+'.previous.'+str(time.time_ns())+'.json')
+                with backup.open('xb') as stream:
+                    stream.write(self.path.read_bytes());stream.flush();os.fsync(stream.fileno())
+            self.save()
+        elif self.path.exists():
             data=json.loads(self.path.read_text())
             if data.get('set_sha256')!=self.set.sha256:raise ValueError('progress belongs to another trajectory set')
             self.completed=data['completed'];self.active=data['active'];self.halted=data['halted']

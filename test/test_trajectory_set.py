@@ -77,3 +77,35 @@ def test_selected_start_invalid_before_arming():
     for goal in [(99.,0.,2.),(0.,0.,float('nan')),(0.,0.,.1)]:
         with pytest.raises(ValueError):c.begin(0.,(0.,0.,.2),target=goal)
     assert c.phase is None and c.number==0
+
+
+@pytest.mark.parametrize('state',['completed','halted','exhausted','malformed'])
+def test_explicit_startup_restart_archives_exact_progress_and_selects_first(tmp_path,state):
+    s=TrajectorySet(fixture_set(tmp_path));path=tmp_path/'progress.json';q=TrajectoryProgress(s,path)
+    q.begin();q.complete(grounded=True,disarmed=True)
+    if state=='halted':q.begin();q.fail()
+    if state=='exhausted':q.begin();q.complete(grounded=True,disarmed=True)
+    if state=='malformed':path.write_bytes(b'preserve incomplete prior progress')
+    original=path.read_bytes()
+    restarted=TrajectoryProgress(s,path,restart_on_start=True)
+    assert restarted.index==0 and restarted.active is None and restarted.available
+    assert not restarted.halted
+    backups=list(tmp_path.glob('progress.previous.*.json'))
+    assert len(backups)==1 and backups[0].read_bytes()==original
+    assert json.loads(path.read_text())==dict(set_sha256=s.sha256,completed=[],active=None,halted=False)
+    restarted.begin();assert restarted.active==0
+
+
+def test_startup_restart_write_failure_preserves_original(tmp_path,monkeypatch):
+    s=TrajectorySet(fixture_set(tmp_path));path=tmp_path/'progress.json';q=TrajectoryProgress(s,path)
+    q.begin();original=path.read_bytes()
+    def fail(*args):raise OSError('cannot replace progress')
+    monkeypatch.setattr('aruco_landing.trajectory_set.os.replace',fail)
+    with pytest.raises(OSError):TrajectoryProgress(s,path,restart_on_start=True)
+    assert path.read_bytes()==original
+    assert next(tmp_path.glob('progress.previous.*.json')).read_bytes()==original
+
+
+def test_first_start_without_progress_starts_first(tmp_path):
+    s=TrajectorySet(fixture_set(tmp_path));q=TrajectoryProgress(s,tmp_path/'progress.json',restart_on_start=True)
+    assert q.index==0 and q.available and q.path.exists()

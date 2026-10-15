@@ -32,6 +32,7 @@ exec taskset -c "${CPUS_CONTROL:?}" roslaunch aruco_landing landing_trial.launch
   estimation_transition:="${LANDING_ALLOW_MARKER_SWITCH:-false}" \
   router_auto_switch:="${LANDING_AUTO_SWITCH:-false}" \
   router_fallback:="${LANDING_AUTO_FALLBACK_TO_OPTITRACK:-false}" \
+  trajectory_restart_on_start:="${LANDING_TRAJECTORY_RESTART_ON_START:-false}" \
   termination_height_source:="${LANDING_TERMINATION_HEIGHT_SOURCE:-dual_height}" \
   marker_loss_s:="${LANDING_MARKER_LOSS_TIMEOUT_S:-0.5}" \
   approach_speed_mps:="${LANDING_APPROACH_SPEED_MPS:-0.5}" \
