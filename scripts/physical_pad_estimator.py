@@ -14,6 +14,7 @@ from sensor_msgs.msg import CameraInfo, Image, CompressedImage
 from std_msgs.msg import Bool, String, Int32MultiArray
 from std_srvs.srv import Trigger, TriggerResponse
 
+from aruco_landing.campaign import pad_identity
 from aruco_landing.physical_pad import PhysicalPadDetector, SessionAlignment, inverse, relative_covariance, valid_transform, center_crop
 from aruco_landing.pose_alignment import pose_matrix, matrix_pose
 
@@ -57,6 +58,7 @@ class PhysicalPadEstimator:
         self.jpeg_quality = int(rospy.get_param('~jpeg_quality', 80))
         if not 0 < self.debug_hz <= 60 or not 0 < self.estimate_hz <= 60:
             raise ValueError('image/estimate rates must be in (0,60]')
+        self.pad_identity=pad_identity(rospy.get_param('~pad_configuration'))
         with open(rospy.get_param('~pad_configuration')) as f:
             manifest = yaml.safe_load(f)
         with open(rospy.get_param('~body_camera_calibration')) as f:
@@ -293,7 +295,7 @@ class PhysicalPadEstimator:
             self.visible_pub.publish(False)
         done=list(self.completed); durations=list(self.durations)
         rate=(len(done)-1)/(done[-1]-done[0]) if len(done)>1 and time.monotonic()-done[-1]<1 else 0.
-        status={'alignment_ready':ready,'alignment_mode':'frozen_for_this_session' if ready else 'learning',
+        status={'pad_identity':self.pad_identity,'alignment_ready':ready,'alignment_mode':'frozen_for_this_session' if ready else 'learning',
                 'alignment_pairs':samples,'marker_fresh':fresh,'last_error':self.last_error,
                 'processing_width':self.processing_width,'processing_height':self.processing_height,'center_crop':True,
                 'images_received':self.received,'images_processed':self.processed,'valid_poses':self.accepted,

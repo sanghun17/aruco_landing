@@ -27,6 +27,7 @@ from aruco_landing.physical_pad import SessionAlignment, valid_transform
 from aruco_landing.pose_alignment import pose_matrix, matrix_pose, quaternion_distance_deg
 from aruco_landing.yaw_control import yaw_feedback
 from aruco_landing.repeat_trial import RepeatTrial
+from aruco_landing.campaign import pad_identity,progress_path,acquire_campaign_lock
 from aruco_landing.trajectory_set import TrajectorySet, TrajectoryProgress
 
 
@@ -80,6 +81,7 @@ class LandingTrial:
         with open(rospy.get_param('~extrinsic_file'))as f:mount=yaml.safe_load(f)
         self.X=np.array(mount['matrix_row_major']).reshape(4,4)
         if mount['validation_result']!='PASS'or not valid_transform(self.X):raise ValueError('invalid mount')
+        self.campaign_pad=None;self.estimator_status={}
         self.trajectory_set=None;self.trajectory_progress=None;self.trajectory_ack={}
         self.trajectory_goal=None;self.trajectory_pad=None;self.trajectory_settled_since=None
         self.last_selection_publish=-1e30;self.trajectory_z_bounds=None
@@ -87,8 +89,16 @@ class LandingTrial:
         if set_path:
             if self.repeat is None:raise ValueError('trajectory set requires existing ground repeat mode')
             self.trajectory_set=TrajectorySet(set_path)
-            self.trajectory_progress=TrajectoryProgress(self.trajectory_set,rospy.get_param('~trajectory_progress_file'),
-                restart_on_start=bool(rospy.get_param('~trajectory_restart_on_start',False)))
+            campaign_root=rospy.get_param('~trajectory_campaign_root','')
+            if campaign_root:
+                self.campaign_lease=acquire_campaign_lock(campaign_root)
+                self.campaign_pad=pad_identity(rospy.get_param('/physical_pad_estimator/pad_configuration'))
+                checkpoint=progress_path(campaign_root,self.trajectory_set.sha256,self.campaign_pad)
+                self.trajectory_progress=TrajectoryProgress(self.trajectory_set,checkpoint,
+                    resume_interrupted=True,pad=self.campaign_pad)
+            else:
+                self.trajectory_progress=TrajectoryProgress(self.trajectory_set,rospy.get_param('~trajectory_progress_file'),
+                    restart_on_start=bool(rospy.get_param('~trajectory_restart_on_start',False)))
             if 'z' in geofence['enabled_axes']:
                 self.trajectory_z_bounds=tuple(map(float,geofence['box']['z']))
             self.selection_pub=rospy.Publisher('/landing/trajectory/selection',String,queue_size=1,latch=True)
@@ -124,7 +134,8 @@ class LandingTrial:
             ('command','/landing/trial/landing_cmd_pad',TwistStamped),
             ('routed',self.routed_topic,PoseStamped),
             ('router','/landing/pose_transition/status',String),
-            ('trajectory_ready','/landing/trajectory/ready',String)]
+            ('trajectory_ready','/landing/trajectory/ready',String),
+            ('estimator','/landing/estimator/status',String)]
         self.subscribers=[rospy.Subscriber(topic,kind,self.receive,key,queue_size=10,tcp_nodelay=True)for key,topic,kind in topics]
         rospy.Service('~start',Trigger,self.start);rospy.Service('~reset',Trigger,self.reset);rospy.Service('~abort',Trigger,self.abort)
         rospy.Timer(rospy.Duration(1/60.),self.tick)
@@ -211,6 +222,13 @@ class LandingTrial:
                 except (ValueError,TypeError):return
             if key=='mocap'and m.header.frame_id!=self.global_frame:return
             self.inputs[key]=m;self.receipts[key]=now
+            if key=='estimator':
+                try:self.estimator_status=json.loads(m.data)
+                except (ValueError,TypeError):self.estimator_status={}
+                if self.campaign_pad is not None and self.estimator_status.get('pad_identity')!=self.campaign_pad:
+                    self.entry_ready=False;self.standby_since=None
+                    if self.trial.phase not in ('IDLE','COMPLETE','CANCELLED'):
+                        self.trial.fail('perception_pad_changed');self.capture_hold()
             if key=='trajectory_ready':
                 try:self.trajectory_ack=json.loads(m.data)
                 except (ValueError,TypeError):self.trajectory_ack={}
@@ -250,6 +268,8 @@ class LandingTrial:
         return not hasattr(m,'header')or (not m.header.stamp.is_zero()and -.05<=rospy.get_time()-m.header.stamp.to_sec()<=age)
 
     def health(self,now):
+        if self.campaign_pad is not None and (not self.fresh('estimator',now,1.5)
+                or self.estimator_status.get('pad_identity')!=self.campaign_pad):return False
         if not self.fresh('mocap',now)or not self.fresh('local',now):return False
         if not self.fresh('state',now,2.)or not self.inputs['state'].connected:return False
         # FlightState stamp/receipt independently prevent acting on a stopped safety node.
@@ -399,6 +419,10 @@ class LandingTrial:
                             progress.fail()
                     except OSError:
                         self.trial.fail('trajectory_progress_write_failed');self.capture_hold()
+                if not progress.available and progress.active is None and len(progress.completed)==len(progress.set.entries):
+                    self.entry_ready=False;self.standby_since=None
+                    if not state.armed:
+                        self.trial.phase='COMPLETE';self.trial.reason='pad_trajectory_set_complete'
                 data_ready=data_ready and not progress.halted
                 if progress.active is None:
                     data_ready=data_ready and progress.available
@@ -414,7 +438,7 @@ class LandingTrial:
                         self.last_selection_publish=now
                 elif state.mode!='OFFBOARD':self.standby_since=None
                 entered=state.mode=='OFFBOARD' and self.last_fcu_mode not in (None,'OFFBOARD')
-                if entered and self.trial.phase not in ('AUTO_LAND','CUT_WAIT'):
+                if entered and self.trial.phase not in ('AUTO_LAND','CUT_WAIT') and not (self.trajectory_progress is not None and self.trajectory_progress.index==len(self.trajectory_set.entries)):
                     ext=self.inputs.get('extended')
                     airborne=self.fresh('extended',now,2.) and ext.landed_state==ExtendedState.LANDED_STATE_IN_AIR
                     grounded=self.fresh('extended',now,2.) and ext.landed_state==ExtendedState.LANDED_STATE_ON_GROUND
@@ -579,7 +603,7 @@ class LandingTrial:
                 position=transform(self.inputs['mocap'])[:3,3] if self.fresh('mocap',now) else None
                 valid_origin=position is not None and all(math.isfinite(v) for v in position) and 0<=position[2]<=self.repeat.ground_max and all(lo<=v<=hi for v,(lo,hi) in zip(position[:2],self.repeat.bounds))
                 entry_ready=bool(entry_ready and state.mode=='POSCTL' and not state.armed and landed and self.fresh('velocity',now) and valid_origin)
-                mission_hint.update(ground_start_enabled=True,offboard_entry_ready=entry_ready)
+                mission_hint.update(ground_start_enabled=not (self.trajectory_progress is not None and len(self.trajectory_progress.completed)==len(self.trajectory_set.entries)),offboard_entry_ready=entry_ready)
             self.mission_pub.publish(json.dumps(mission_hint))
             self.status.publish(json.dumps(dict(phase=self.trial.phase,reason=self.trial.reason,dry_run=self.dry,
                 estimation_source=self.router_status.get('source','unknown') if self.transition else 'optitrack',estimation_transition=self.transition,landing_finish_mode=self.trial.finish_mode,termination_height_source=self.trial.termination_height_source,termination_height_m=self.trial.contact_height_m,mocap_camera_height_m=mocap_height,force_disarm_ack=self.cut_result,offboard_entry_ready=entry_ready,healthy=bool(healthy),marker_qualified=bool(good),marker_height_m=height,

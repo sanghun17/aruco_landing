@@ -72,9 +72,9 @@ class TrajectorySet:
 
 
 class TrajectoryProgress:
-    def __init__(self,trajectory_set,path,*,restart_on_start=False):
+    def __init__(self,trajectory_set,path,*,restart_on_start=False,resume_interrupted=False,pad=None):
         self.set=trajectory_set;self.path=Path(path)
-        self.completed=[];self.active=None;self.halted=False
+        self.completed=[];self.active=None;self.halted=False;self.pad=pad
         if restart_on_start:
             if self.path.exists():
                 # Preserve exact previous bytes before atomically replacing progress.
@@ -86,13 +86,25 @@ class TrajectoryProgress:
             data=json.loads(self.path.read_text())
             if data.get('set_sha256')!=self.set.sha256:raise ValueError('progress belongs to another trajectory set')
             self.completed=data['completed'];self.active=data['active'];self.halted=data['halted']
-            if self.completed!=list(range(len(self.completed))) or len(self.completed)>len(self.set.entries):
+            if (not isinstance(self.completed,list) or any(type(i) is not int or not 0<=i<len(self.set.entries) for i in self.completed)
+                    or self.completed!=sorted(set(self.completed))):
                 raise ValueError('invalid trajectory progress')
+            if self.pad is not None and data.get('pad')!=self.pad:raise ValueError('progress belongs to another pad')
+            if self.active is not None and (type(self.active) is not int or not 0<=self.active<len(self.set.entries) or self.active in self.completed):
+                raise ValueError('invalid active trajectory')
             if self.active is not None or self.halted:
-                raise ValueError('unfinished/failed flight in progress file; explicit operator review required')
+                if not resume_interrupted:
+                    raise ValueError('unfinished/failed flight in progress file; explicit operator review required')
+                self.archive()
+                self.active=None;self.halted=False;self.save()
+
+    def archive(self):
+        backup=self.path.with_name(self.path.stem+'.previous.'+str(time.time_ns())+'.json')
+        with backup.open('xb') as stream:
+            stream.write(self.path.read_bytes());stream.flush();os.fsync(stream.fileno())
 
     @property
-    def index(self):return len(self.completed)
+    def index(self):return next((i for i in range(len(self.set.entries)) if i not in self.completed),len(self.set.entries))
 
     @property
     def available(self):return not self.halted and self.active is None and self.index<len(self.set.entries)
@@ -102,7 +114,7 @@ class TrajectoryProgress:
             self.path.parent.mkdir(parents=True,exist_ok=True)
             temporary=self.path.with_name(self.path.name+'.tmp')
             with temporary.open('w') as stream:
-                json.dump(dict(set_sha256=self.set.sha256,completed=self.completed,active=self.active,halted=self.halted),stream)
+                json.dump(dict(set_sha256=self.set.sha256,completed=self.completed,active=self.active,halted=self.halted,**({'pad':self.pad} if self.pad is not None else {})),stream)
                 stream.flush();os.fsync(stream.fileno())
             os.replace(temporary,self.path)
         except OSError:
@@ -115,13 +127,13 @@ class TrajectoryProgress:
 
     def complete(self,*,grounded,disarmed):
         if self.halted or self.active is None or not grounded or not disarmed:raise ValueError('confirmed grounded disarm and healthy progress required')
-        self.completed.append(self.active);self.active=None;self.save()
+        self.completed=sorted(set(self.completed+[self.active]));self.active=None;self.save()
 
     def fail(self):
         self.halted=True;self.save()
 
     def status(self):
         return dict(set_sha256=self.set.sha256,next_index=self.index,total=len(self.set.entries),
-                    completed=len(self.completed),active=self.active,halted=self.halted,
+                    completed=len(self.completed),active=self.active,halted=self.halted,pad=self.pad,all_complete=len(self.completed)==len(self.set.entries),
                     current=self.set.selection(self.active if self.active is not None else self.index)
                     if self.index<len(self.set.entries) else None)
