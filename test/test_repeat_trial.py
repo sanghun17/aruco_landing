@@ -53,3 +53,24 @@ def test_arm_timeout_and_rejected_ground_start():
     assert c.phase=='FAILED_HOLD'
     with pytest.raises(ValueError):c.begin(6.,(0.,0.,1.))
     with pytest.raises(ValueError):c.begin(6.,(2.4,0.,.2))
+
+
+def test_immediate_takeoff_and_initial_position_begin_parallel_qualification():
+    c=cycle();c.takeoff_dwell=0.;c.initial_position_dwell=0.
+    c.begin(0.,(0.,0.,.2),target=(.4,.2,2.));step(c,.1)
+    assert c.phase=='TAKEOFF'
+    step(c,.2,speed=.11);assert c.phase=='TAKEOFF'
+    step(c,.3);assert c.phase=='INITIAL_POSITION'
+    step(c,.4,position=(.4,.2,1.5));assert c.phase=='INITIAL_POSITION'
+    step(c,.5);assert c.phase=='APPROACH'
+    assert c.dwell==1., 'APPROACH arrival stability still overlaps optical qualification'
+
+
+@pytest.mark.parametrize('value',[-.1,float('nan'),float('inf')])
+def test_invalid_stage_dwell_rejected(value):
+    c=cycle()
+    config=dict(height_m=2.,speed_mps=.5,vertical_speed_mps=.5,position_tolerance_m=.1,
+        velocity_tolerance_mps=.1,settle_s=1.,takeoff_settle_s=value,stage_timeout_s=30.,
+        arm_timeout_s=5.,ground_max_z_m=.5,random_min_radius_m=.75,extra_geofence_margin_m=.3)
+    with pytest.raises(ValueError):RepeatTrial(config,dict(enabled_axes=['x','y'],margin_m=.4,
+        box=dict(x=[-2.5,2.5],y=[-2.5,2.5])))

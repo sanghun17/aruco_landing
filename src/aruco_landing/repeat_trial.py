@@ -13,6 +13,10 @@ class RepeatTrial:
         self.tolerance = float(config['position_tolerance_m'])
         self.velocity_tolerance = float(config['velocity_tolerance_mps'])
         self.dwell = float(config['settle_s'])
+        self.takeoff_dwell = float(config.get('takeoff_settle_s',self.dwell))
+        self.initial_position_dwell = float(config.get('initial_position_settle_s',self.dwell))
+        if not all(math.isfinite(v) and v>=0 for v in (self.takeoff_dwell,self.initial_position_dwell)):
+            raise ValueError('stage settle times must be finite and nonnegative')
         self.timeout = float(config['stage_timeout_s'])
         self.arm_timeout = float(config['arm_timeout_s'])
         self.ground_max = float(config['ground_max_z_m'])
@@ -103,7 +107,9 @@ class RepeatTrial:
             self.settled_since = None
         elif self.settled_since is None:
             self.settled_since = now
-        elif now - self.settled_since >= self.dwell:
+        dwell=self.takeoff_dwell if self.phase=='TAKEOFF' else (
+            self.initial_position_dwell if self.phase=='INITIAL_POSITION' else self.dwell)
+        if settled and now-self.settled_since>=dwell:
             if self.phase == 'TAKEOFF':
                 self.phase, self.goal = ('INITIAL_POSITION',self.initial_goal) if self.initial_goal is not None else ('CENTER', (0., 0., self.height))
             elif self.phase == 'CENTER':
