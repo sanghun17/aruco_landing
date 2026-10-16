@@ -10,13 +10,14 @@ import numpy as np
 import rospy
 import yaml
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
-from sensor_msgs.msg import CameraInfo, Image, CompressedImage
+from sensor_msgs.msg import CameraInfo, Image, CompressedImage, Imu
 from std_msgs.msg import Bool, String, Int32MultiArray
 from std_srvs.srv import Trigger, TriggerResponse
 
 from aruco_landing.campaign import pad_identity
 from aruco_landing.physical_pad import PhysicalPadDetector, SessionAlignment, inverse, relative_covariance, valid_transform, center_crop
 from aruco_landing.pose_alignment import pose_matrix, matrix_pose
+from aruco_landing.gravity import AttitudeHistory, GravityReference
 
 
 def message_transform(pose):
@@ -49,6 +50,10 @@ class PhysicalPadEstimator:
         self.pad_frame = rospy.get_param('~pad_frame', 'physical_landing_pad')
         self.global_frame = rospy.get_param('~global_frame', 'odom')
         self.max_age = float(rospy.get_param('~max_image_age_s', .20))
+        self.gravity_constraint = bool(rospy.get_param('~gravity_constraint', False))
+        self.attitude_frame = rospy.get_param('~attitude_frame', 'base_link')
+        self.attitude_history = AttitudeHistory()
+        self.gravity_reference = GravityReference()
         self.estimate_hz = float(rospy.get_param('~estimate_rate_hz', 60.))
         self.debug_hz = float(rospy.get_param('~detected_image_rate_hz', 10.))
         self.processing_width = int(rospy.get_param('~processing_width', 720))
@@ -86,7 +91,8 @@ class PhysicalPadEstimator:
         self.alignment = SessionAlignment(
             min_samples=int(rospy.get_param('~alignment_min_samples', 60)),
             min_duration_s=float(rospy.get_param('~alignment_min_duration_s', 2.)),
-            window_size=240, max_translation_std_m=.03, max_rotation_std_deg=2.)
+            window_size=240, max_translation_std_m=.03, max_rotation_std_deg=2.,
+            level_pad=bool(rospy.get_param('~level_pad', self.gravity_constraint)))
         self.target_pub = rospy.Publisher('/landing/target_pose_camera', PoseWithCovarianceStamped, queue_size=1)
         self.body_pub = rospy.Publisher('/landing/vehicle_pose_pad', PoseWithCovarianceStamped, queue_size=1)
         self.camera_pub = rospy.Publisher('/landing/camera_pose_pad', PoseWithCovarianceStamped, queue_size=1)
@@ -102,6 +108,8 @@ class PhysicalPadEstimator:
         self.ready_pub.publish(False)
         rospy.Service('/landing/alignment/reset', Trigger, self.reset)
         rospy.Subscriber(rospy.get_param('~mocap_topic','/vrpn_client_node/pure/pose'), PoseStamped, self.mocap_callback, queue_size=300, tcp_nodelay=True)
+        if self.gravity_constraint:
+            rospy.Subscriber(rospy.get_param('~attitude_topic', '/mavros/imu/data'), Imu, self.attitude_callback, queue_size=300, tcp_nodelay=True)
         rospy.Subscriber(rospy.get_param('~camera_info_topic','/landing/camera/camera_info'), CameraInfo, self.info_callback, queue_size=1)
         rospy.Subscriber(rospy.get_param('~image_topic','/landing/camera/image_raw'), Image, self.image_callback, queue_size=1, buff_size=4*1024*1024, tcp_nodelay=True)
         self.worker = threading.Thread(target=self.process_loop, daemon=True)
@@ -114,8 +122,23 @@ class PhysicalPadEstimator:
     def reset(self, _request):
         with self.lock:
             self.alignment.reset()
+            self.attitude_history.clear()
+            self.gravity_reference.reset()
             self.ready_pub.publish(False)
         return TriggerResponse(True, 'session alignment cleared; learning the current pad placement')
+
+    def attitude_callback(self, msg):
+        if msg.header.frame_id != self.attitude_frame or msg.header.stamp.is_zero():
+            return
+        if msg.orientation_covariance[0] < 0 or abs(rospy.get_time()-msg.header.stamp.to_sec()) > .25:
+            return
+        try:
+            q = msg.orientation
+            R = pose_matrix([0., 0., 0.], [q.x, q.y, q.z, q.w])[:3, :3]
+            with self.lock:
+                self.attitude_history.add(msg.header.stamp.to_sec(), R)
+        except (ValueError, np.linalg.LinAlgError):
+            pass
 
     def mocap_callback(self, msg):
         if msg.header.frame_id != self.global_frame or msg.header.stamp.is_zero():
@@ -209,7 +232,21 @@ class PhysicalPadEstimator:
         gray = array[:,:,0] if channels==1 else cv2.cvtColor(array,cv2.COLOR_RGB2GRAY if msg.encoding=='rgb8' else cv2.COLOR_BGR2GRAY)
         K, D = self.camera_info
         gray, cropped_K = center_crop(gray, K, self.processing_width, self.processing_height)
-        result, corners, ids = self.detector.detect(gray, cropped_K, D)
+        camera_normal = None
+        if self.gravity_constraint:
+            with self.lock:
+                attitude = self.attitude_history.interpolate(stamp_s)
+                if attitude is None:
+                    raise ValueError('waiting for bracketed IMU attitude')
+                if not self.gravity_reference.ready:
+                    global_body = self.alignment.interpolate(stamp_s)
+                    if global_body is not None:
+                        self.gravity_reference.observe(stamp_s, global_body[:3, :3], attitude)
+                if not self.gravity_reference.ready:
+                    raise ValueError('learning IMU/body gravity reference')
+                body_up = self.gravity_reference.rotation @ attitude.T @ np.array([0., 0., 1.])
+                camera_normal = self.camera_from_body[:3, :3] @ body_up
+        result, corners, ids = self.detector.detect(gray, cropped_K, D, camera_normal)
         if rospy.get_time()-stamp_s > self.max_age:
             raise ValueError('image expired during processing')
         self.processed += 1
@@ -296,6 +333,10 @@ class PhysicalPadEstimator:
         done=list(self.completed); durations=list(self.durations)
         rate=(len(done)-1)/(done[-1]-done[0]) if len(done)>1 and time.monotonic()-done[-1]<1 else 0.
         status={'pad_identity':self.pad_identity,'alignment_ready':ready,'alignment_mode':'frozen_for_this_session' if ready else 'learning',
+                'gravity_constraint':self.gravity_constraint,'level_pad':self.alignment.level_pad,
+                'gravity_reference_ready':self.gravity_reference.ready,
+                'gravity_reference_correction_deg':self.gravity_reference.correction_deg,
+                'gravity_reference_rms_deg':self.gravity_reference.rms_deg,
                 'alignment_pairs':samples,'marker_fresh':fresh,'last_error':self.last_error,
                 'processing_width':self.processing_width,'processing_height':self.processing_height,'center_crop':True,
                 'images_received':self.received,'images_processed':self.processed,'valid_poses':self.accepted,

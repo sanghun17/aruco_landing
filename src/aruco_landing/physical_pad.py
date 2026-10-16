@@ -6,6 +6,7 @@ import numpy as np
 from aruco_landing.pose_alignment import (
     PadAlignmentEstimator, pose_matrix, matrix_pose, normalize_quaternion,
 )
+from aruco_landing.gravity import planar_pose_with_normal, level_alignment_observation
 
 CORNERS = np.array([[-.5, .5], [.5, .5], [.5, -.5], [-.5, -.5]])
 
@@ -85,16 +86,16 @@ class PhysicalPadDetector:
                 raise ValueError('duplicate ID or invalid metric marker size')
             self.models[m['id']] = np.c_[points, np.zeros(4)]
 
-    def detect(self, gray, K, D):
+    def detect(self, gray, K, D, camera_normal=None):
         if self.detector:
             corners, ids, _ = self.detector.detectMarkers(gray)
         else:
             corners, ids, _ = cv2.aruco.detectMarkers(gray, self.dictionary, parameters=self.params)
         detected = [] if ids is None else ids.flatten().tolist()
-        result = self.estimate(corners, detected, K, D)
+        result = self.estimate(corners, detected, K, D, camera_normal)
         return result, corners, detected
 
-    def estimate(self, corners, ids, K, D):
+    def estimate(self, corners, ids, K, D, camera_normal=None):
         if len(set(ids)) != len(ids):
             return None
         used, objects, pixels = [], [], []
@@ -106,10 +107,18 @@ class PhysicalPadDetector:
         if len(used) < self.min_markers:
             return None
         obj, pix = np.array(objects, np.float64), np.array(pixels, np.float64)
-        solutions = cv2.solvePnPGeneric(obj, pix, K, D, flags=cv2.SOLVEPNP_IPPE, reprojectionError=np.zeros((2,1),np.float64))
+        constrained = camera_normal is not None
+        if constrained:
+            pose = planar_pose_with_normal(obj, pix, K, D, camera_normal)
+            if pose is None:
+                return None
+            solutions = (True, [cv2.Rodrigues(pose[:3, :3])[0]], [pose[:3, 3].reshape(3, 1)])
+        else:
+            solutions = cv2.solvePnPGeneric(obj, pix, K, D, flags=cv2.SOLVEPNP_IPPE, reprojectionError=np.zeros((2,1),np.float64))
         choices = []
         for rv, tv in zip(solutions[1], solutions[2]):
-            rv, tv = cv2.solvePnPRefineLM(obj, pix, K, D, rv, tv)
+            if not constrained:
+                rv, tv = cv2.solvePnPRefineLM(obj, pix, K, D, rv, tv)
             error = np.linalg.norm(cv2.projectPoints(obj, rv, tv, K, D)[0].reshape(-1,2)-pix, axis=1)
             if np.isfinite(error).all() and tv[2, 0] > 0:
                 choices.append((np.median(error)+np.mean(np.minimum(error,10)), rv, tv, error))
@@ -119,7 +128,13 @@ class PhysicalPadDetector:
         good = np.flatnonzero(error < 4.)
         if len(good) < .75 * len(obj):
             return None
-        rv, tv = cv2.solvePnPRefineLM(obj[good], pix[good], K, D, rv, tv)
+        if constrained:
+            pose = planar_pose_with_normal(obj[good], pix[good], K, D, camera_normal)
+            if pose is None:
+                return None
+            rv, tv = cv2.Rodrigues(pose[:3, :3])[0], pose[:3, 3].reshape(3, 1)
+        else:
+            rv, tv = cv2.solvePnPRefineLM(obj[good], pix[good], K, D, rv, tv)
         error = np.linalg.norm(cv2.projectPoints(obj, rv, tv, K, D)[0].reshape(-1,2)-pix, axis=1)
         rms = float(np.sqrt(np.mean(error[good]**2)))
         inlier_ids = [mid for i, mid in enumerate(used) if np.all(error[4*i:4*i+4] < 4.)]
@@ -136,10 +151,11 @@ class PhysicalPadDetector:
 class SessionAlignment:
     """Learn once per session, then freeze without any saved global-pad transform."""
     def __init__(self, min_samples=30, min_duration_s=2., max_gap_s=.04,
-                 max_pair_step_m=.08, max_pair_step_deg=15., **kwargs):
+                 max_pair_step_m=.08, max_pair_step_deg=15., level_pad=False, **kwargs):
         self.estimator = PadAlignmentEstimator(min_samples=min_samples, **kwargs)
         self.min_duration_s, self.max_gap_s = min_duration_s, max_gap_s
         self.max_pair_step_m, self.max_pair_step_deg = max_pair_step_m, max_pair_step_deg
+        self.level_pad = level_pad
         self.mocap = deque(maxlen=1000)
         self.first_pair = None
         self.last_pair = None
@@ -193,7 +209,8 @@ class SessionAlignment:
             if self.first_pair is None:
                 self.first_pair = stamp
             self.last_pair = stamp; self.pair_count += 1
-            estimate = self.estimator.add(global_body, pad_from_body)
+            observation = level_alignment_observation(global_body, pad_from_body) if self.level_pad else global_body
+            estimate = self.estimator.add(observation, pad_from_body)
             if estimate['ready'] and stamp-self.first_pair >= self.min_duration_s:
                 self.transform = self.estimator.freeze()['transform'].copy()
                 self.reference_time = stamp

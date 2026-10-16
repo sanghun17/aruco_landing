@@ -10,6 +10,9 @@
   <arg name="processing_width" default="720"/>
   <arg name="processing_height" default="720"/>
   <arg name="estimate_rate_hz" default="60"/>
+  <arg name="gravity_constraint" default="$(optenv LANDING_GRAVITY_CONSTRAINT false)"/>
+  <arg name="level_pad" default="$(optenv LANDING_LEVEL_PAD false)"/>
+  <arg name="attitude_topic" default="/mavros/imu/data"/>
   <node pkg="aruco_landing" type="physical_pad_estimator.py" name="physical_pad_estimator" output="screen" required="true">
     <param name="processing_width" value="$(arg processing_width)"/>
     <param name="processing_height" value="$(arg processing_height)"/>
@@ -21,5 +24,8 @@
     <param name="mocap_topic" value="$(arg mocap_topic)"/>
     <param name="detected_image_rate_hz" value="$(arg detected_image_rate_hz)"/>
     <param name="estimate_rate_hz" value="$(arg estimate_rate_hz)"/>
+    <param name="gravity_constraint" value="$(arg gravity_constraint)"/>
+    <param name="level_pad" value="$(arg level_pad)"/>
+    <param name="attitude_topic" value="$(arg attitude_topic)"/>
   </node>
 </launch>
