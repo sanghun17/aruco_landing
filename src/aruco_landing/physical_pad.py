@@ -76,7 +76,6 @@ class PhysicalPadDetector:
         self.detector = (cv2.aruco.ArucoDetector(self.dictionary, self.params)
                          if hasattr(cv2.aruco, 'ArucoDetector') else None)
         self.min_markers, self.max_rms_px = min_markers, max_rms_px
-        self.last_pnp_diagnostics = None
         self.models = {}
         for m in manifest['markers']:
             angle = np.radians(m['yaw_deg'])
@@ -97,8 +96,6 @@ class PhysicalPadDetector:
         return result, corners, detected
 
     def estimate(self, corners, ids, K, D, camera_normal=None):
-        self.last_pnp_diagnostics = dict(method='none', detected_ids=list(ids),
-            input_ids=[], input_points=0, used_points=0, per_marker_points={}, accepted=False)
         if len(set(ids)) != len(ids):
             return None
         used, objects, pixels = [], [], []
@@ -111,53 +108,24 @@ class PhysicalPadDetector:
             return None
         obj, pix = np.array(objects, np.float64), np.array(pixels, np.float64)
         constrained = camera_normal is not None
-        fit = np.arange(len(obj))
-        method = 'gravity' if constrained else 'ippe_lm'
-        self.last_pnp_diagnostics = dict(method=method, detected_ids=list(ids),
-            input_ids=list(used), input_points=len(obj), used_points=0,
-            per_marker_points={}, accepted=False)
-        if not constrained and len(used) > 1:
-            self.last_pnp_diagnostics['method'] = 'corner_ransac_ippe_lm'
-            ok, _, _, consensus = cv2.solvePnPRansac(
-                obj, pix, K, D, iterationsCount=200, reprojectionError=4.,
-                confidence=.999, flags=cv2.SOLVEPNP_EPNP)
-            self.last_pnp_diagnostics['ransac_solver'] = 'epnp'
-            if not ok or consensus is None or len(consensus) < max(4, .75 * len(obj)):
-                # EPNP minimal samples can be degenerate on perfectly planar,
-                # noiseless boards. Permit an alternative only if ALL corners
-                # agree, never as a weaker-consensus escape from rejection.
-                ok, _, _, consensus = cv2.solvePnPRansac(
-                    obj, pix, K, D, iterationsCount=200, reprojectionError=4.,
-                    confidence=.999, flags=cv2.SOLVEPNP_AP3P)
-                self.last_pnp_diagnostics['ransac_solver'] = 'ap3p_all_points'
-                if not ok or consensus is None or len(consensus) != len(obj):
-                    return None
-            fit = np.sort(consensus.ravel())
         if constrained:
             pose = planar_pose_with_normal(obj, pix, K, D, camera_normal)
             if pose is None:
                 return None
             solutions = (True, [cv2.Rodrigues(pose[:3, :3])[0]], [pose[:3, 3].reshape(3, 1)])
         else:
-            # Initialize on consensus only: an all-point LM can already be
-            # biased by a bad quad before a later residual filter sees it.
-            solutions = cv2.solvePnPGeneric(obj[fit], pix[fit], K, D, flags=cv2.SOLVEPNP_IPPE, reprojectionError=np.zeros((2,1),np.float64))
+            solutions = cv2.solvePnPGeneric(obj, pix, K, D, flags=cv2.SOLVEPNP_IPPE, reprojectionError=np.zeros((2,1),np.float64))
         choices = []
         for rv, tv in zip(solutions[1], solutions[2]):
             if not constrained:
-                rv, tv = cv2.solvePnPRefineLM(obj[fit], pix[fit], K, D, rv, tv)
+                rv, tv = cv2.solvePnPRefineLM(obj, pix, K, D, rv, tv)
             error = np.linalg.norm(cv2.projectPoints(obj, rv, tv, K, D)[0].reshape(-1,2)-pix, axis=1)
             if np.isfinite(error).all() and tv[2, 0] > 0:
-                choices.append((np.median(error[fit])+np.mean(np.minimum(error[fit],10)), rv, tv, error))
+                choices.append((np.median(error)+np.mean(np.minimum(error,10)), rv, tv, error))
         if not choices:
             return None
         _, rv, tv, error = min(choices, key=lambda x:x[0])
-        # RANSAC already selected the fit set; do not reintroduce excluded
-        # corners or bias the consensus by screening an all-point solution.
-        good = fit if not constrained and len(used) > 1 else np.flatnonzero(error < 4.)
-        self.last_pnp_diagnostics.update(used_points=len(good),
-            per_marker_points={str(mid): int(np.isin(np.arange(4*i, 4*i+4), good).sum())
-                               for i, mid in enumerate(used)})
+        good = np.flatnonzero(error < 4.)
         if len(good) < .75 * len(obj):
             return None
         if constrained:
@@ -172,16 +140,12 @@ class PhysicalPadDetector:
         inlier_ids = [mid for i, mid in enumerate(used) if np.all(error[4*i:4*i+4] < 4.)]
         if rms > self.max_rms_px or len(inlier_ids) < self.min_markers:
             return None
-        if self.last_pnp_diagnostics.get('ransac_solver') == 'ap3p_all_points' and not np.all(error < 4.):
-            return None
         T = np.eye(4); T[:3,:3] = cv2.Rodrigues(rv)[0]; T[:3,3] = tv.ravel()
         # Pad +Z points out of the visible face; require camera above that plane.
         if not valid_transform(T) or inverse(T)[2,3] <= 0:
             return None
         covariance = np.diag([.01**2]*3 + [np.radians(2.)**2]*3)
-        self.last_pnp_diagnostics.update(accepted=True, rms_px=rms, inlier_ids=inlier_ids)
-        return {'camera_from_pad':T, 'inlier_ids':inlier_ids, 'rms_px':rms, 'covariance':covariance,
-                'consensus':dict(self.last_pnp_diagnostics)}
+        return {'camera_from_pad':T, 'inlier_ids':inlier_ids, 'rms_px':rms, 'covariance':covariance}
 
 
 class SessionAlignment:
