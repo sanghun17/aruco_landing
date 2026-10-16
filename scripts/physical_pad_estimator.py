@@ -97,7 +97,7 @@ class PhysicalPadEstimator:
         self.body_pub = rospy.Publisher('/landing/vehicle_pose_pad', PoseWithCovarianceStamped, queue_size=1)
         self.camera_pub = rospy.Publisher('/landing/camera_pose_pad', PoseWithCovarianceStamped, queue_size=1)
         self.global_body_pub = rospy.Publisher('/landing/vision_pose_marker', PoseStamped, queue_size=1)
-        self.global_pad_pub = rospy.Publisher('/landing/pad_pose_global', PoseStamped, queue_size=1)
+        self.global_pad_pub = rospy.Publisher('/landing/pad_pose_global', PoseStamped, queue_size=1, latch=True)
         self.ready_pub = rospy.Publisher('/landing/alignment/ready', Bool, queue_size=1, latch=True)
         self.status_pub = rospy.Publisher('/landing/estimator/status', String, queue_size=1, latch=True)
         self.visible_pub = rospy.Publisher('/landing/target_visible', Bool, queue_size=1)

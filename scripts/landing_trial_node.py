@@ -152,10 +152,10 @@ class LandingTrial:
                     and self.fresh('state',now,2.) and state.connected and not state.armed
                     and self.fresh('extended',now,2.) and ext.landed_state==ExtendedState.LANDED_STATE_ON_GROUND):
                 return TriggerResponse(success=False,message='requires a failed active trial, grounded and disarmed')
-            try:self.trajectory_progress.finish_failed(grounded=True,disarmed=True,
-                    reason=rospy.get_param('~reviewed_failure_reason','') or self.trial.failure_reason or self.trial.reason or 'operator_confirmed_failure')
+            reason=rospy.get_param('~reviewed_failure_reason','') or self.trial.failure_reason or self.trial.reason or 'operator_confirmed_failure'
+            try:self.trajectory_progress.finish_failed(grounded=True,disarmed=True,reason=reason)
             except (ValueError,OSError) as error:return TriggerResponse(success=False,message=str(error))
-            self.trial.phase='FAILED_COMPLETE';self.entry_ready=False;self.standby_since=None;self.trajectory_ack={}
+            self.trial.phase='FAILED_COMPLETE';self.trial.reason=self.trial.failure_reason=reason;self.entry_ready=False;self.standby_since=None;self.trajectory_ack={}
             return TriggerResponse(success=True,message='recorded failed trial; next trajectory selected')
 
     def prepare_standby(self,now):
