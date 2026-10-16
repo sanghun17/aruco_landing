@@ -40,7 +40,7 @@ class Trial:
         self.phase='FAILED_HOLD';self.reason=reason;self.good_since=None
 
     def recover_failed(self,*,enabled,offboard,armed,healthy):
-        if not (enabled and self.phase=='FAILED_HOLD' and offboard and armed and healthy
+        if not (enabled and self.finish_mode=='force_disarm' and self.phase=='FAILED_HOLD' and offboard and armed and healthy
                 and self.reason in ('trajectory_initial_alignment_timeout','marker_lost_trial_failed',
                                     'marker_source_lost_trial_failed')):return False
         self.failure_reason=self.reason;self.phase='GT_RECOVERY';return True
@@ -48,9 +48,9 @@ class Trial:
     def can_force_disarm(self, *, offboard, armed, healthy, mocap_height,
                          marker_good=False, marker_height=None):
         """Caller supplies only fresh, aligned pad-relative camera heights."""
-        if not (self.finish_mode=='force_disarm' and self.phase in ('DESCEND','CUT_WAIT')
+        if not (self.finish_mode=='force_disarm' and self.phase in ('DESCEND','CUT_WAIT','GT_DESCEND','GT_CUT_WAIT')
                 and offboard and armed and healthy):return False
-        if self.termination_height_source=='optitrack':
+        if self.termination_height_source=='optitrack' or self.phase in ('GT_DESCEND','GT_CUT_WAIT'):
             return mocap_height is not None and 0<=mocap_height<=self.contact_height_m
         return (marker_good and marker_height is not None and 0<=marker_height<=self.contact_height_m
                 and mocap_height is not None and 0<=mocap_height<=.25)
@@ -58,12 +58,16 @@ class Trial:
     def step(self, now, *, offboard, armed, healthy, marker_good, marker_height=None,
              landed=False, auto_land=False, marker_time=None, mocap_height=None, estimation_ready=True):
         old=self.phase
-        if old=='GT_RECOVERY':
-            if landed and not armed:
-                self.phase='FAILED_COMPLETE';return self.phase
+        if old=='GT_CUT_WAIT':
+            if not armed and landed:self.phase='FAILED_COMPLETE'
+            return self.phase
+        if old in ('GT_RECOVERY','GT_DESCEND'):
             if not armed:self.cancel('recovery_disarmed_without_ground_confirmation')
-            elif not offboard and not auto_land:self.cancel('pilot_left_gt_recovery')
+            elif not offboard:self.cancel('pilot_or_safety_left_gt_recovery')
             elif not healthy:self.fail('gt_recovery_input_invalid')
+            elif old=='GT_RECOVERY' and estimation_ready:self.phase='GT_DESCEND'
+            elif old=='GT_DESCEND' and self.can_force_disarm(offboard=offboard,armed=armed,
+                    healthy=healthy,mocap_height=mocap_height):self.phase='GT_CUT_WAIT'
             return self.phase
         if old in ('IDLE','COMPLETE','CANCELLED','FAILED_HOLD','FAILED_COMPLETE'):
             return self.phase

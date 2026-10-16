@@ -20,6 +20,24 @@ class HardwareReferenceTest(unittest.TestCase):
         args.update(kwargs)
         return tr.command(**args)
 
+    def test_gt_resume_preserves_elapsed_reference_and_clears_cross_source_derivative(self):
+        tr=self.make();self.command(tr,1.,1.45)
+        tr.derivative=(1.,-1.)
+        tr.resume_from_last_command(25.)
+        self.assertEqual(tr.started,24.)
+        self.assertEqual(tr.derivative,(0.,0.));self.assertIsNone(tr.previous_stamp)
+        np.testing.assert_allclose(tr.command(25.,[0,0,1.45],25.,0.,'landing_pad',True),[0,0,-.55])
+        self.assertEqual(tr.state,'tracking')
+
+    def test_gt_resume_unstarted_and_terminal_references(self):
+        tr=self.make();tr.reset();tr.resume_from_last_command(20.)
+        self.assertEqual(tr.state,'waiting');self.assertIsNone(tr.started)
+        tr.start(20.)
+        self.assertIsNone(tr.command(25.,[0,0,.4],25.,0.,'landing_pad',True))
+        tr.resume_from_last_command(30.)
+        self.assertEqual(tr.state,'terminal_landing')
+        self.assertIsNone(tr.command(30.,[0,0,.4],30.,0.,'landing_pad',True))
+
     def test_vertical_error_sign_and_user_gain(self):
         tr=self.make()
         self.assertAlmostEqual(self.command(tr,1.,1.55)[2],-.75)

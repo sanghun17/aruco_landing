@@ -119,6 +119,23 @@ class HardwareReferenceTracker:
         self.started = self.last_now = now
         self.state = 'tracking'
 
+    def resume_from_last_command(self, now):
+        """Preserve path progress while changing the feedback pose source.
+
+        Time spent holding for GT admission does not advance the reference.
+        Derivatives are relearned from GT samples instead of crossing sources.
+        """
+        if not math.isfinite(now):raise ValueError('finite resume time required')
+        if self.started is None:
+            if self.state!='waiting':raise ValueError('invalid unstarted tracker')
+            return
+        if self.last_now is None or now<self.last_now or self.state=='failed_clock':
+            raise ValueError('cannot resume after clock reversal')
+        elapsed=self.last_now-self.started
+        self.started=now-elapsed;self.last_now=now
+        self.previous_stamp=self.previous_error=None;self.derivative=(0.,0.)
+        self.state='terminal_landing' if elapsed>=self.reference.duration else 'tracking'
+
     def command(self, now, position, stamp, age, frame_id, visible):
         """Return pad-frame velocity, or None to use the legacy landing command.
 

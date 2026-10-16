@@ -154,6 +154,7 @@ class LandingController:
         self.reset_service = rospy.Service(
             "~reset", Trigger, self.reset_callback
         )
+        self.gt_resume_service = rospy.Service('~resume_with_gt',Trigger,self.resume_gt_callback)
         self.enable_service = rospy.Service(
             "~enable", SetBool, self.enable_callback
         )
@@ -253,6 +254,16 @@ class LandingController:
         with self.lock:
             self.reset_locked()
         return TriggerResponse(success=True, message="landing controller reset")
+
+    def resume_gt_callback(self, _request):
+        with self.lock:
+            if not self.enabled or self.visible or self.reference_tracker is None or self.selected_reference is None:
+                return TriggerResponse(success=False,message='requires paused selected trajectory controller')
+            try:self.reference_tracker.resume_from_last_command(rospy.get_time())
+            except ValueError as error:return TriggerResponse(success=False,message=str(error))
+            self.previous_error=self.previous_pose_stamp=None;self.error_derivative=(0.,0.)
+            self.state=self.WAITING
+        return TriggerResponse(success=True,message='same reference resumed with GT feedback; progress preserved')
 
     def enable_callback(self, request):
         with self.lock:
