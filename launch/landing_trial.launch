@@ -19,6 +19,7 @@
   <arg name="trajectory_reference_file" default=""/>
   <arg name="trajectory_set_file" default=""/>
   <arg name="trajectory_campaign_root" default=""/>
+  <arg name="failed_trial_gt_recovery" default="false"/>
   <arg name="trajectory_restart_on_start" default="false"/>
   <arg name="trajectory_progress_file" default="/work/flight_logs/trajectory_set_progress.json"/>
   <arg name="trajectory_reference_sha256" default=""/>
@@ -63,6 +64,7 @@
   <node pkg="aruco_landing" type="landing_trial_node.py" name="landing_trial" output="screen" required="true">
     <param name="trajectory_set_file" value="$(arg trajectory_set_file)"/>
     <param name="trajectory_campaign_root" value="$(arg trajectory_campaign_root)"/>
+    <param name="failed_trial_gt_recovery" value="$(arg failed_trial_gt_recovery)"/>
     <param name="trajectory_restart_on_start" value="$(arg trajectory_restart_on_start)"/>
     <param name="trajectory_progress_file" value="$(arg trajectory_progress_file)"/>
     <param name="repeat_test" value="$(arg repeat_test)"/>

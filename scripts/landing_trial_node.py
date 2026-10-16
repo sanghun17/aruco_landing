@@ -54,6 +54,8 @@ class LandingTrial:
             self.sync_status_path=Path(repeat_config['sync_status_file'])
             self.sync_reason='not_checked'
         self.transition=bool(rospy.get_param('~estimation_transition',False))
+        self.gt_recovery=bool(rospy.get_param('~failed_trial_gt_recovery',False))
+        self.recovery_started=None;self.recovery_gt_since=None
         self.routed_topic=rospy.get_param('~routed_pose_topic','/landing/vision_pose_selected')
         self.router_status={}
         self.routed_by_stamp={}
@@ -95,10 +97,12 @@ class LandingTrial:
                 self.campaign_pad=pad_identity(rospy.get_param('/physical_pad_estimator/pad_configuration'))
                 checkpoint=progress_path(campaign_root,self.trajectory_set.sha256,self.campaign_pad)
                 self.trajectory_progress=TrajectoryProgress(self.trajectory_set,checkpoint,
-                    resume_interrupted=True,pad=self.campaign_pad)
+                    resume_interrupted=True,preserve_interrupted=self.gt_recovery,pad=self.campaign_pad)
             else:
                 self.trajectory_progress=TrajectoryProgress(self.trajectory_set,rospy.get_param('~trajectory_progress_file'),
                     restart_on_start=bool(rospy.get_param('~trajectory_restart_on_start',False)))
+            if self.gt_recovery and self.trajectory_progress.active is not None:
+                self.trial.fail('interrupted_trial_requires_review')
             if 'z' in geofence['enabled_axes']:
                 self.trajectory_z_bounds=tuple(map(float,geofence['box']['z']))
             self.selection_pub=rospy.Publisher('/landing/trajectory/selection',String,queue_size=1,latch=True)
@@ -137,8 +141,22 @@ class LandingTrial:
             ('trajectory_ready','/landing/trajectory/ready',String),
             ('estimator','/landing/estimator/status',String)]
         self.subscribers=[rospy.Subscriber(topic,kind,self.receive,key,queue_size=10,tcp_nodelay=True)for key,topic,kind in topics]
-        rospy.Service('~start',Trigger,self.start);rospy.Service('~reset',Trigger,self.reset);rospy.Service('~abort',Trigger,self.abort)
+        rospy.Service('~accept_failed_trial',Trigger,self.accept_failed_trial);rospy.Service('~start',Trigger,self.start);rospy.Service('~reset',Trigger,self.reset);rospy.Service('~abort',Trigger,self.abort)
         rospy.Timer(rospy.Duration(1/60.),self.tick)
+
+    def accept_failed_trial(self,_):
+        with self.lock:
+            now=time.monotonic();state=self.inputs.get('state');ext=self.inputs.get('extended')
+            if not (self.trajectory_progress and self.trajectory_progress.active is not None
+                    and self.trial.phase in ('FAILED_HOLD','CANCELLED','FAILED_COMPLETE')
+                    and self.fresh('state',now,2.) and state.connected and not state.armed
+                    and self.fresh('extended',now,2.) and ext.landed_state==ExtendedState.LANDED_STATE_ON_GROUND):
+                return TriggerResponse(success=False,message='requires a failed active trial, grounded and disarmed')
+            try:self.trajectory_progress.finish_failed(grounded=True,disarmed=True,
+                    reason=rospy.get_param('~reviewed_failure_reason','') or self.trial.failure_reason or self.trial.reason or 'operator_confirmed_failure')
+            except (ValueError,OSError) as error:return TriggerResponse(success=False,message=str(error))
+            self.trial.phase='FAILED_COMPLETE';self.entry_ready=False;self.standby_since=None;self.trajectory_ack={}
+            return TriggerResponse(success=True,message='recorded failed trial; next trajectory selected')
 
     def prepare_standby(self,now):
         # Service calls must never block the setpoint timer. Preparation is
@@ -151,7 +169,7 @@ class LandingTrial:
                 if not self.dry and self.trial.finish_mode=='force_disarm':
                     if not rospy.get_param('/flight_safety_response/allow_external_termination',False):return
                     rospy.wait_for_service('/flight_safety_response/request_termination',timeout=1.)
-                if not self.dry and self.trial.finish_mode=='auto_land':
+                if not self.dry and (self.trial.finish_mode=='auto_land' or self.gt_recovery):
                     value=self.param_service(param_id='COM_DISARM_LAND')
                     if not value.success or max(value.value.real,value.value.integer)<=0:return
                 rospy.wait_for_service('/landing_trial_controller/reset',timeout=1.)
@@ -379,12 +397,19 @@ class LandingTrial:
             try:
                 with self.lock:
                     state=self.inputs.get('state')
-                    allowed=bool(state and ((mode=='AUTO.LAND'and self.trial.phase=='AUTO_LAND'and state.mode=='OFFBOARD')
+                    allowed=bool(state and ((mode=='AUTO.LAND'and state.mode=='OFFBOARD'and (self.trial.phase=='AUTO_LAND'
+                            or (self.trial.phase=='GT_RECOVERY' and self.recovery_gt_ready(time.monotonic()))))
                         or (mode=='POSCTL'and self.trial.phase=='FAILED_HOLD'and state.mode=='AUTO.LAND')))
                 if allowed:self.mode_service(base_mode=0,custom_mode=mode)
             except rospy.ServiceException as error:rospy.logwarn('mode request failed: %s',error)
             finally:self.mode_pending=False
         threading.Thread(target=call,daemon=True).start()
+
+    def recovery_gt_ready(self,now):
+        return bool(self.health(now) and self.fresh('routed',now) and self.fresh('router',now)
+            and self.router_status.get('source')=='optitrack'
+            and self.router_status.get('last_output_source')=='optitrack'
+            and self.recovery_gt_since is not None and now-self.recovery_gt_since>=.5)
 
     def output(self,T,stamp):
         m=PoseWithCovarianceStamped();m.header.stamp=stamp;m.header.frame_id='landing_pad'
@@ -415,11 +440,14 @@ class LandingTrial:
                         if self.trial.phase=='COMPLETE' and grounded and not state.armed and not progress.halted:
                             progress.complete(grounded=True,disarmed=True)
                             self.entry_ready=False;self.standby_since=None;self.trajectory_ack={}
+                        elif self.trial.phase=='FAILED_COMPLETE' and grounded and not state.armed:
+                            progress.finish_failed(grounded=True,disarmed=True,reason=self.trial.failure_reason or self.trial.reason)
+                            self.entry_ready=False;self.standby_since=None;self.trajectory_ack={}
                         elif self.trial.phase in ('FAILED_HOLD','CANCELLED') and not progress.halted:
                             progress.fail()
                     except OSError:
                         self.trial.fail('trajectory_progress_write_failed');self.capture_hold()
-                if not progress.available and progress.active is None and len(progress.completed)==len(progress.set.entries):
+                if not progress.available and progress.active is None and len(progress.finished)==len(progress.set.entries):
                     self.entry_ready=False;self.standby_since=None
                     if not state.armed:
                         self.trial.phase='COMPLETE';self.trial.reason='pad_trajectory_set_complete'
@@ -427,7 +455,7 @@ class LandingTrial:
                 if progress.active is None:
                     data_ready=data_ready and progress.available
             if self.auto_start:
-                standby=state.mode not in ('OFFBOARD','AUTO.LAND') and self.trial.phase in ('IDLE','CANCELLED','COMPLETE')
+                standby=state.mode not in ('OFFBOARD','AUTO.LAND') and self.trial.phase in ('IDLE','CANCELLED','COMPLETE','FAILED_COMPLETE')
                 if self.repeat and standby and not state.armed and data_ready and not healthy:
                     self.prepare_external_session(now)
                 if standby and healthy and data_ready:
@@ -438,7 +466,7 @@ class LandingTrial:
                         self.last_selection_publish=now
                 elif state.mode!='OFFBOARD':self.standby_since=None
                 entered=state.mode=='OFFBOARD' and self.last_fcu_mode not in (None,'OFFBOARD')
-                if entered and self.trial.phase not in ('AUTO_LAND','CUT_WAIT') and not (self.trajectory_progress is not None and self.trajectory_progress.index==len(self.trajectory_set.entries)):
+                if entered and self.trial.phase not in ('AUTO_LAND','CUT_WAIT','GT_RECOVERY') and not (self.trajectory_progress is not None and self.trajectory_progress.index==len(self.trajectory_set.entries)):
                     ext=self.inputs.get('extended')
                     airborne=self.fresh('extended',now,2.) and ext.landed_state==ExtendedState.LANDED_STATE_IN_AIR
                     grounded=self.fresh('extended',now,2.) and ext.landed_state==ExtendedState.LANDED_STATE_ON_GROUND
@@ -462,7 +490,7 @@ class LandingTrial:
                             if self.trajectory_progress is not None:self.trajectory_progress.begin()
                             self.trial.phase='ARMING';self.trial.reason='pilot_requested_ground_repeat'
                             self.entry_time=now;self.capture_hold();self.heading=yaw(self.hold)
-                            self.cut_result=None;self.request_arm()
+                            self.cut_result=None;self.trial.failure_reason='';self.request_arm()
                         except (ValueError,OSError) as error:self.trial.fail(str(error))
                     elif allowed and self.trial.prepare(now-1.):
                         self.entry_time=now;self.capture_hold()
@@ -492,6 +520,7 @@ class LandingTrial:
                     and self.trajectory_ack==self.trajectory_set.selection(self.trajectory_progress.active))
                 if now-self.repeat.started>self.repeat.timeout:
                     self.trial.fail('trajectory_initial_alignment_timeout');self.capture_hold()
+            if self.trial.phase=='FAILED_HOLD' and not self.trial.failure_reason:self.trial.failure_reason=self.trial.reason
             previous=self.trial.phase
             if self.repeat and self.trial.phase in self.repeat.PHASES:
                 v=self.inputs.get('velocity');speed=math.sqrt(v.twist.linear.x**2+v.twist.linear.y**2+v.twist.linear.z**2) if v else float('inf')
@@ -506,6 +535,20 @@ class LandingTrial:
                     self.trial.good_since=self.trial.last_good=None
             else:
                 phase=self.trial.step(now,offboard=state.mode=='OFFBOARD',armed=state.armed,healthy=healthy,marker_good=good,marker_height=height,marker_time=marker_time,mocap_height=mocap_height,estimation_ready=estimation_ready,landed=landed,auto_land=state.mode=='AUTO.LAND')
+            if self.trial.recover_failed(enabled=self.gt_recovery and self.transition and self.trajectory_set is not None,
+                    offboard=state.mode=='OFFBOARD',armed=state.armed,healthy=healthy):
+                phase=self.trial.phase;self.recovery_started=now;self.recovery_gt_since=None
+                self.capture_hold()
+            if phase=='GT_RECOVERY':
+                gt_ok=(healthy and self.fresh('routed',now) and self.fresh('router',now)
+                    and self.router_status.get('source')=='optitrack'
+                    and self.router_status.get('last_output_source')=='optitrack')
+                if not gt_ok:self.recovery_gt_since=None
+                elif self.recovery_gt_since is None:self.recovery_gt_since=now
+                if state.mode=='OFFBOARD':
+                    if self.recovery_gt_ready(now):self.request_mode('AUTO.LAND',now)
+                    if now-self.recovery_started>5.:
+                        self.trial.fail('gt_recovery_land_not_acknowledged');phase=self.trial.phase;self.capture_hold()
             if previous!=phase:
                 self.capture_hold()
                 if phase=='APPROACH'and self.hold is not None:self.altitude=self.hold[2,3];self.heading=yaw(self.hold)
@@ -537,7 +580,7 @@ class LandingTrial:
             if phase=='PRESTREAM' and self.fresh('local',now):self.capture_hold()
             if self.auto_start and state.mode not in ('OFFBOARD','AUTO.LAND') and healthy:
                 self.capture_hold();sp=self.hold_setpoint(self.hold)
-            if phase not in ('IDLE','CANCELLED','COMPLETE')and self.hold is not None and self.fresh('local',now):sp=self.hold_setpoint(self.hold)
+            if phase not in ('IDLE','CANCELLED','COMPLETE','FAILED_COMPLETE')and self.hold is not None and self.fresh('local',now):sp=self.hold_setpoint(self.hold)
             if self.repeat and phase in self.repeat.PHASES and healthy and control_fresh:
                 L_B=transform(self.inputs['local']);G_B=transform(self.inputs['mocap'])
                 L_G=L_B[:3,:3]@G_B[:3,:3].T
@@ -590,7 +633,7 @@ class LandingTrial:
             if sp is not None:
                 sp.header.stamp=rospy.Time.now();self.pub.publish(sp)
                 if self.live is not None:self.live.publish(sp)
-            mission_state={'FAILED_HOLD':'hold_failed','AUTO_LAND':'landing','COMPLETE':'complete','CUT_WAIT':'terminating'}.get(self.trial.phase,'active'if self.trial.phase in ('ARMING','TAKEOFF','CENTER','RANDOM_POSITION','INITIAL_POSITION','APPROACH','DESCEND')else 'idle')
+            mission_state={'FAILED_HOLD':'hold_failed','GT_RECOVERY':'landing','FAILED_COMPLETE':'complete','AUTO_LAND':'landing','COMPLETE':'complete','CUT_WAIT':'terminating'}.get(self.trial.phase,'active'if self.trial.phase in ('ARMING','TAKEOFF','CENTER','RANDOM_POSITION','INITIAL_POSITION','APPROACH','DESCEND')else 'idle')
             entry_ready=bool(self.entry_ready and healthy and data_ready and self.standby_since is not None and now-self.standby_since>=1.)
             if self.trajectory_set is not None:
                 entry_ready=bool(entry_ready and self.trajectory_progress.available and self.aligned and self.pad is not None
@@ -603,9 +646,9 @@ class LandingTrial:
                 position=transform(self.inputs['mocap'])[:3,3] if self.fresh('mocap',now) else None
                 valid_origin=position is not None and all(math.isfinite(v) for v in position) and 0<=position[2]<=self.repeat.ground_max and all(lo<=v<=hi for v,(lo,hi) in zip(position[:2],self.repeat.bounds))
                 entry_ready=bool(entry_ready and state.mode=='POSCTL' and not state.armed and landed and self.fresh('velocity',now) and valid_origin)
-                mission_hint.update(ground_start_enabled=not (self.trajectory_progress is not None and len(self.trajectory_progress.completed)==len(self.trajectory_set.entries)),offboard_entry_ready=entry_ready)
+                mission_hint.update(ground_start_enabled=not (self.trajectory_progress is not None and len(self.trajectory_progress.finished)==len(self.trajectory_set.entries)),offboard_entry_ready=entry_ready)
             self.mission_pub.publish(json.dumps(mission_hint))
-            self.status.publish(json.dumps(dict(phase=self.trial.phase,reason=self.trial.reason,dry_run=self.dry,
+            self.status.publish(json.dumps(dict(phase=self.trial.phase,reason=self.trial.reason,failure_reason=self.trial.failure_reason,failed_trial_gt_recovery=self.gt_recovery,dry_run=self.dry,
                 estimation_source=self.router_status.get('source','unknown') if self.transition else 'optitrack',estimation_transition=self.transition,landing_finish_mode=self.trial.finish_mode,termination_height_source=self.trial.termination_height_source,termination_height_m=self.trial.contact_height_m,mocap_camera_height_m=mocap_height,force_disarm_ack=self.cut_result,offboard_entry_ready=entry_ready,healthy=bool(healthy),marker_qualified=bool(good),marker_height_m=height,
                 marker_confirm_s=self.trial.marker_confirm_s,marker_loss_s=self.trial.marker_loss_s,
                 repeat_test=self.repeat.status() if self.repeat else None,data_sync_ready=data_ready,

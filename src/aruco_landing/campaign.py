@@ -85,7 +85,7 @@ def flight_record(bag_path,owner_checkout):
                     selection=item;set_sha=q['set_sha256']
                 if selection is not None:
                     final=d
-                    if d['phase'] in ('FAILED_HOLD','CANCELLED'):failed=True
+                    if d.get('failure_reason') or d['phase'] in ('FAILED_HOLD','CANCELLED','GT_RECOVERY','FAILED_COMPLETE'):failed=True
                     if d['phase']=='COMPLETE' and d['reason'] in ('force_disarm_confirmed','pad_trajectory_set_complete'):
                         complete=True
     if selection is None:raise ValueError('no active selected trajectory in recording')

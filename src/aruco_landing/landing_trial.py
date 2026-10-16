@@ -10,6 +10,7 @@ class Trial:
     prestream_s: float = 1.
     phase: str = 'IDLE'
     reason: str = ''
+    failure_reason: str = ''
     good_since: object = None
     last_good: object = None
     prepared_at: object = None
@@ -26,7 +27,7 @@ class Trial:
             raise ValueError('trial thresholds must be finite and positive')
 
     def prepare(self, now):
-        if self.phase not in ('IDLE','COMPLETE','CANCELLED'):
+        if self.phase not in ('IDLE','COMPLETE','CANCELLED','FAILED_COMPLETE'):
             return False
         self.phase='PRESTREAM';self.prepared_at=now
         self.reason='waiting_for_pilot_offboard';self.good_since=self.last_good=None
@@ -37,6 +38,12 @@ class Trial:
 
     def fail(self, reason):
         self.phase='FAILED_HOLD';self.reason=reason;self.good_since=None
+
+    def recover_failed(self,*,enabled,offboard,armed,healthy):
+        if not (enabled and self.phase=='FAILED_HOLD' and offboard and armed and healthy
+                and self.reason in ('trajectory_initial_alignment_timeout','marker_lost_trial_failed',
+                                    'marker_source_lost_trial_failed')):return False
+        self.failure_reason=self.reason;self.phase='GT_RECOVERY';return True
 
     def can_force_disarm(self, *, offboard, armed, healthy, mocap_height,
                          marker_good=False, marker_height=None):
@@ -51,7 +58,14 @@ class Trial:
     def step(self, now, *, offboard, armed, healthy, marker_good, marker_height=None,
              landed=False, auto_land=False, marker_time=None, mocap_height=None, estimation_ready=True):
         old=self.phase
-        if old in ('IDLE','COMPLETE','CANCELLED','FAILED_HOLD'):
+        if old=='GT_RECOVERY':
+            if landed and not armed:
+                self.phase='FAILED_COMPLETE';return self.phase
+            if not armed:self.cancel('recovery_disarmed_without_ground_confirmation')
+            elif not offboard and not auto_land:self.cancel('pilot_left_gt_recovery')
+            elif not healthy:self.fail('gt_recovery_input_invalid')
+            return self.phase
+        if old in ('IDLE','COMPLETE','CANCELLED','FAILED_HOLD','FAILED_COMPLETE'):
             return self.phase
         if old=='CUT_WAIT':
             if not armed:self.phase='COMPLETE';self.reason='force_disarm_confirmed'

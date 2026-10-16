@@ -109,3 +109,37 @@ def test_startup_restart_write_failure_preserves_original(tmp_path,monkeypatch):
 def test_first_start_without_progress_starts_first(tmp_path):
     s=TrajectorySet(fixture_set(tmp_path));q=TrajectoryProgress(s,tmp_path/'progress.json',restart_on_start=True)
     assert q.index==0 and q.available and q.path.exists()
+
+
+def test_failed_result_advances_after_grounded_disarm_preserves_success_count(tmp_path):
+    s=TrajectorySet(fixture_set(tmp_path));path=tmp_path/'progress.json';q=TrajectoryProgress(s,path)
+    q.begin();q.fail();original=path.read_bytes()
+    for grounded,disarmed in [(False,True),(True,False)]:
+        with pytest.raises(ValueError):q.finish_failed(grounded=grounded,disarmed=disarmed,reason='alignment_timeout')
+    assert path.read_bytes()==original
+    q.finish_failed(grounded=True,disarmed=True,reason='alignment_timeout')
+    assert original in [p.read_bytes() for p in tmp_path.glob('progress.previous.*.json')]
+    q=TrajectoryProgress(s,path)
+    assert q.available and q.index==1 and not q.completed
+    assert q.status()['failed']==1 and q.status()['finished']==1
+    assert q.failed[0]['selection']==s.selection(0)
+    q.begin();q.complete(grounded=True,disarmed=True)
+    assert q.status()['all_complete'] and q.status()['completed']==1 and q.status()['failed']==1
+    assert not q.available
+
+
+@pytest.mark.parametrize('failed',[[{'index':True,'reason':'bad'}],[{'index':0,'reason':''}],
+    [{'index':0,'reason':'x'},{'index':0,'reason':'y'}],[{'index':99,'reason':'x'}]])
+def test_invalid_failed_records_rejected(tmp_path,failed):
+    s=TrajectorySet(fixture_set(tmp_path));path=tmp_path/'p.json';q=TrajectoryProgress(s,path);q.save()
+    d=json.loads(path.read_text());d['failed']=failed;path.write_text(json.dumps(d))
+    with pytest.raises(ValueError):TrajectoryProgress(s,path)
+
+
+def test_recovery_startup_preserves_interrupted_failure_for_operator_review(tmp_path):
+    s=TrajectorySet(fixture_set(tmp_path));path=tmp_path/'p.json';q=TrajectoryProgress(s,path)
+    q.begin();q.fail();original=path.read_bytes()
+    q=TrajectoryProgress(s,path,resume_interrupted=True,preserve_interrupted=True)
+    assert q.active==0 and q.halted and path.read_bytes()==original
+    q.finish_failed(grounded=True,disarmed=True,reason='operator_reviewed_alignment_timeout')
+    assert q.index==1 and q.available
