@@ -103,6 +103,7 @@ class PhysicalPadEstimator:
         self.visible_pub = rospy.Publisher('/landing/target_visible', Bool, queue_size=1)
         self.ids_pub = rospy.Publisher('/landing/markers/ids', Int32MultiArray, queue_size=1)
         self.inliers_pub = rospy.Publisher('/landing/estimator/inlier_ids', Int32MultiArray, queue_size=1)
+        self.consensus_pub = rospy.Publisher('/landing/estimator/consensus', String, queue_size=1)
         self.debug_pub = rospy.Publisher('/landing/debug/image', Image, queue_size=1)
         self.jpeg_pub = rospy.Publisher('/landing/debug/image/compressed', CompressedImage, queue_size=1)
         self.ready_pub.publish(False)
@@ -246,7 +247,13 @@ class PhysicalPadEstimator:
                     raise ValueError('learning IMU/body gravity reference')
                 body_up = self.gravity_reference.rotation @ attitude.T @ np.array([0., 0., 1.])
                 camera_normal = self.camera_from_body[:3, :3] @ body_up
+        pnp_start = time.monotonic()
         result, corners, ids = self.detector.detect(gray, cropped_K, D, camera_normal)
+        detection_pose_ms = (time.monotonic()-pnp_start)*1000
+        consensus = dict(self.detector.last_pnp_diagnostics or {})
+        consensus.update(image_stamp_s=msg.header.stamp.to_sec(), pose_stamp_s=stamp_s,
+                         detection_pose_ms=detection_pose_ms)
+        self.consensus_pub.publish(String(data=json.dumps(consensus)))
         if rospy.get_time()-stamp_s > self.max_age:
             raise ValueError('image expired during processing')
         self.processed += 1
