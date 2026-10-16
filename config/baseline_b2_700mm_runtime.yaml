@@ -1,0 +1,50 @@
+# Runtime geometry matching the existing B2_20261015 print (700 mm).
+name: B2_He_EECR2023_700mm_hardware
+dictionary: DICT_6X6_50
+frame_convention: pad center origin; +X paper up and +Y paper left at yaw zero; +Z
+  out of paper
+calibration:
+  method: nominal geometry of the actual 2026-10-15 B2 print; no physical survey or
+    GT fit
+  print_side_m: 0.7
+  print_layout_sha256: a1e2f5b55e498ef357a6cf1d73424a507dde16d8c7e6800468cbe58b83ee5b68
+  print_manifest: data/results/aruco-landing-print/B2_20261015/assembly.json
+  legacy_simulation_label: B3
+  source_canvas_units: 341.0
+markers:
+- id: 1
+  center_m:
+    x: 0.27917888563049853
+    y: 0.27917888563049853
+  side_m: 0.09237536656891496
+  yaw_deg: -90.0
+- id: 2
+  center_m:
+    x: -0.27917888563049853
+    y: 0.27917888563049853
+  side_m: 0.09237536656891496
+  yaw_deg: -90.0
+- id: 3
+  center_m:
+    x: -0.27917888563049853
+    y: -0.27917888563049853
+  side_m: 0.09237536656891496
+  yaw_deg: -90.0
+- id: 4
+  center_m:
+    x: 0.27917888563049853
+    y: -0.27917888563049853
+  side_m: 0.09237536656891496
+  yaw_deg: -90.0
+- id: 19
+  center_m:
+    x: 0.0
+    y: 0.0
+  side_m: 0.46598240469208213
+  yaw_deg: -90.0
+- id: 43
+  center_m:
+    x: 0.0
+    y: 0.0
+  side_m: 0.04721407624633431
+  yaw_deg: -90.0

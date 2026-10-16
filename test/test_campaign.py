@@ -13,6 +13,9 @@ def pad(name='proposed_pad_1_layout_physical_20260920_runtime.yaml',raw=b'metric
 def test_perception_named_pad_and_custom_layouts_are_separate(tmp_path):
     a=pad();b=pad('paper_pad_layout_physical_20260920_runtime.yaml')
     assert a['key']=='proposed1' and b['key']=='baseline'
+    b2=pad('baseline_b2_700mm_runtime.yaml')
+    assert b2['key']=='b2'
+    assert progress_path(tmp_path,'a'*64,b2) not in (progress_path(tmp_path,'a'*64,a),progress_path(tmp_path,'a'*64,b))
     assert progress_path(tmp_path,'a'*64,a)!=progress_path(tmp_path,'a'*64,b)
     assert progress_path(tmp_path,'a'*64,a)!=progress_path(tmp_path,'a'*64,pad(raw=b'new layout'))
 

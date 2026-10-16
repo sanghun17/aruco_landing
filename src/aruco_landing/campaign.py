@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 
 NAMED_PADS={
+    'baseline_b2_700mm_runtime.yaml':'b2',
     'paper_pad_layout_physical_20260920_runtime.yaml':'baseline',
     'proposed_pad_1_layout_physical_20260920_runtime.yaml':'proposed1',
     'physical_pad.yaml':'legacy',
