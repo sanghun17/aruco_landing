@@ -13,6 +13,9 @@
   <arg name="gravity_constraint" default="$(optenv LANDING_GRAVITY_CONSTRAINT false)"/>
   <arg name="level_pad" default="$(optenv LANDING_LEVEL_PAD false)"/>
   <arg name="attitude_topic" default="/mavros/imu/data"/>
+  <arg name="adaptive_threshold_min" default="$(optenv LANDING_ADAPTIVE_THRESHOLD_MIN 7)"/>
+  <arg name="adaptive_threshold_max" default="$(optenv LANDING_ADAPTIVE_THRESHOLD_MAX 27)"/>
+  <arg name="adaptive_threshold_step" default="$(optenv LANDING_ADAPTIVE_THRESHOLD_STEP 20)"/>
   <node pkg="aruco_landing" type="physical_pad_estimator.py" name="physical_pad_estimator" output="screen" required="true">
     <param name="processing_width" value="$(arg processing_width)"/>
     <param name="processing_height" value="$(arg processing_height)"/>
@@ -27,5 +30,8 @@
     <param name="gravity_constraint" value="$(arg gravity_constraint)"/>
     <param name="level_pad" value="$(arg level_pad)"/>
     <param name="attitude_topic" value="$(arg attitude_topic)"/>
+    <param name="adaptive_threshold_min" value="$(arg adaptive_threshold_min)"/>
+    <param name="adaptive_threshold_max" value="$(arg adaptive_threshold_max)"/>
+    <param name="adaptive_threshold_step" value="$(arg adaptive_threshold_step)"/>
   </node>
 </launch>
