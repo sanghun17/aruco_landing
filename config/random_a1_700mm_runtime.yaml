@@ -1,0 +1,26 @@
+# Runtime geometry matching the existing A1_20261015 random print (700 mm).
+name: A1_random_Pad1_rep1_700mm_hardware
+dictionary: DICT_4X4_100
+frame_convention: pad center origin; +X paper up and +Y paper left at yaw zero; +Z
+  out of paper
+calibration:
+  method: nominal geometry of the actual A1_20261015 print; no physical survey or
+    GT fit
+  print_side_m: 0.7
+  print_layout_sha256: 52dd8e8c918747b05a0bc21459b8e2cf7b50d3e9b4680b7665eda0ed37976e0d
+  source_metric_sha256: 74cb966d9bbf3661ef84e4ecaa849b428941afef2d94e6b5b27eabb1952102f6
+  print_manifest: data/results/aruco-landing-print/A1_20261015/assembly.json
+  source_layout: random-Pad1-rep1
+markers:
+- id: 0
+  center_m:
+    x: 0.0976818640711464
+    y: -0.20197226150027522
+  side_m: 0.2135
+  yaw_deg: -90.0
+- id: 1
+  center_m:
+    x: -0.06667593901928122
+    y: -0.2760669747873828
+  side_m: 0.0574
+  yaw_deg: -90.0
